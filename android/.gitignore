@@ -1,0 +1,11 @@
+# Gradle and CMake output. The engine build writes .cxx per ABI under the
+# module, and the Gradle daemon writes .gradle at the project root; neither is
+# source, and both are large.
+.gradle/
+build/
+.cxx/
+local.properties
+
+# Screenshots are the operator's record of a device run, not build inputs
+# (android/screenshots/README.md explains how they are produced).
+screenshots/*.png
