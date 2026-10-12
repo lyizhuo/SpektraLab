@@ -1,9 +1,24 @@
-// vulkan_gpu.cpp -- synchronous Vulkan compute with explicit host transfers.
+// vulkan_gpu.cpp -- batched Vulkan compute with explicit host transfers.
 //
-// Compute planes remain device-local; independent reusable host buffers stage
-// uploads and readbacks. Every submission completes before returning, so no
-// pooled or staging buffer can be reused while the device still reads it.
-// Command batching and native texture export are subsequent steps.
+// Compute planes remain device-local; reusable host buffers stage uploads and
+// readbacks. Dispatches, copies and fills are recorded into **one** command
+// buffer per flush interval and submitted once, which is the contract this
+// layer has always had (gpu.hpp: a 21-node render is one submission, not 21)
+// and the reason a node costs its kernel rather than a round trip. The Apple
+// backend batches the same way -- `metal_gpu.cpp`'s flush is endEncoding +
+// commit + waitUntilCompleted. The first version here submitted and waited per
+// dispatch instead, which is 29 `vkQueueWaitIdle` calls for a live-tier frame.
+//
+// "Every submission completes before returning" was that version's rule, and
+// it is not the contract: it made the pool safe (nothing could be recycled
+// while the device still read it) at the price of the round trip. The batching
+// equivalent is an explicit hold -- every buffer a recorded command buffer
+// names is retained until the interval has been submitted *and waited for* --
+// so `pool_stats().free_bytes` still means "reusable now" and `trim_pool`
+// still never touches a buffer in flight. The two operations whose contract is
+// completion rather than ordering, `read` and `copy`, end the interval
+// themselves; `flush` is the third caller and is the one the pipeline uses at
+// every node boundary (pipeline.cpp:1753-1768, where reclaim depends on it).
 //
 // Built everywhere but Apple (Windows and Linux). The Vulkan loader is not
 // linked: volk (engine/third_party/volk) opens libvulkan.so.1 / vulkan-1.dll
@@ -47,6 +62,15 @@ struct Buffer {
 namespace {
 
 constexpr uint32_t kWorkgroup = 256;
+// The widest kernel in kKernels (`spk_grain_layers`, `spk_grain_layer_one`, 8
+// storage buffers). One size for the interval's descriptor pool rather than
+// one per kernel: a pool is reset when the interval ends, so the only thing a
+// larger pool costs is a few unused descriptor slots.
+constexpr uint32_t kMaxBindings = 8;
+// Dispatches one pool will serve before it is grown. A flush interval is a
+// node, so this is two orders of magnitude above what the render graph asks
+// for; the growth path exists for callers that dispatch without flushing.
+constexpr uint32_t kDescriptorSetsPerInterval = 64;
 
 std::string vk_error(const char* operation, VkResult result) {
     return std::string(operation) + " failed (VkResult " + std::to_string(int(result)) + ")";
@@ -112,6 +136,10 @@ public:
     ~VulkanGpu() override {
         if (device_) {
             vkDeviceWaitIdle(device_);
+            // An open interval dies with the device: its command buffer is
+            // freed by the command pool and the buffers it held are in
+            // `buffers_` below. Only the handles have to be dropped here.
+            batch_held_.clear();
             destroy_buffer(&upload_staging_);
             destroy_buffer(&read_staging_);
             for (Buffer* b : buffers_) { destroy_buffer(b); delete b; }
@@ -121,6 +149,7 @@ public:
                 if (p.layout) vkDestroyPipelineLayout(device_, p.layout, nullptr);
                 if (p.descriptors) vkDestroyDescriptorSetLayout(device_, p.descriptors, nullptr);
             }
+            if (batch_pool_) vkDestroyDescriptorPool(device_, batch_pool_, nullptr);
             if (command_pool_) vkDestroyCommandPool(device_, command_pool_, nullptr);
             vkDestroyDevice(device_, nullptr);
         }
@@ -372,11 +401,15 @@ public:
         if (!out) return {};
         std::lock_guard<std::mutex> lock(dispatch_mutex_);
         const auto start = diagnostic_start();
-        if (!submit_sync([&](VkCommandBuffer command) {
+        hold(out.get());
+        // Recorded, not run. The fill is ordered before whatever reads the
+        // buffer because both are in the same command buffer, and a *host*
+        // read of it goes through `read`, which submits the interval first.
+        if (!record_batch([&](VkCommandBuffer command) {
                 device_barrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
                 vkCmdFillBuffer(command, out.get()->handle, 0, VkDeviceSize(bytes), 0);
                 transfer_written(command);
-            }, "Vulkan zero fill", error)) return {};
+            }, error)) return {};
         transfer_timing("fill", bytes, start);
         return out;
     }
@@ -444,13 +477,22 @@ public:
         if (!bytes || (dst == src && dst_offset == src_offset)) return true;
         std::lock_guard<std::mutex> lock(dispatch_mutex_);
         const auto start = diagnostic_start();
-        if (!submit_sync([&](VkCommandBuffer command) {
+        hold(dst);
+        hold(src);
+        if (!record_batch([&](VkCommandBuffer command) {
                 device_barrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
                 VkBufferCopy range{VkDeviceSize(src_offset), VkDeviceSize(dst_offset), VkDeviceSize(bytes)};
                 vkCmdCopyBuffer(command, src->handle, dst->handle, 1, &range);
                 transfer_written(command);
-            }, "Vulkan device copy", error)) return false;
+            }, error)) return false;
+        // `copy` is the one transfer whose contract is completion rather than
+        // ordering (gpu.hpp: "success means the transfer is complete"), so the
+        // interval ends here. Nothing is lost by it: the four call sites are a
+        // session's cached planes (engine.cpp:1012 and :1115, each with its own
+        // flush on the line before) and a band's assembly (pipeline.cpp:2263,
+        // whose flush is on the line after).
+        if (!submit_batch("Vulkan device copy", error)) return false;
         transfer_timing("copy", bytes, start);
         return true;
     }
@@ -462,7 +504,11 @@ public:
         std::lock_guard<std::mutex> lock(dispatch_mutex_);
         const auto start = diagnostic_start();
         if (!ensure_staging(read_staging_, bytes, true, error)) return false;
-        if (!submit_sync([&](VkCommandBuffer command) {
+        // Replacing the readback staging is safe even with a recording open:
+        // every `read` ends the interval below, so no recorded copy ever names
+        // the buffer this call hands to `ensure_staging`.
+        hold(src);
+        if (!record_batch([&](VkCommandBuffer command) {
                 device_barrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
                 VkBufferCopy range{VkDeviceSize(src_offset), 0, VkDeviceSize(bytes)};
@@ -478,8 +524,14 @@ public:
                 barrier.size = VkDeviceSize(bytes);
                 vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                      VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &barrier, 0, nullptr);
-            }, "Vulkan host readback", error) ||
-            !mapped_range(read_staging_, bytes, false, error)) return false;
+            }, error)) return false;
+        // A host read is the other place completion is the contract -- the
+        // value is on the host on return, and `pipeline.cpp` reads a reduction
+        // to solve for the next node's constants. `read_staging_` is the
+        // backend's own and may be overwritten by the interval after this one;
+        // the wait is what makes that safe.
+        if (!submit_batch("Vulkan host readback", error)) return false;
+        if (!mapped_range(read_staging_, bytes, false, error)) return false;
         std::memcpy(dst, read_staging_.mapped, bytes);
         transfer_timing("read", bytes, start);
         return true;
@@ -493,6 +545,17 @@ public:
         if (fused_fma_ < 0 && kernel && std::strcmp(kernel, "spk_math_probe") != 0) {
             std::string detail;
             if (!check_math_mode(detail)) fused_fma_ = 1;
+        }
+        // Every kernel's pipeline, in one pass, on the first dispatch that can
+        // know how fma behaves here -- the probe's answer is the
+        // specialization the double-float kernels are built with, so they
+        // cannot be made before it. `get_pipeline` comes after this for
+        // anything that is still missing (a shader that is not there, a
+        // creation that failed), which is where the error carries the kernel's
+        // name.
+        if (fused_fma_ >= 0 && !pipelines_created_) {
+            pipelines_created_ = true;
+            create_all_pipelines();
         }
         const KernelSpec* spec = find_kernel(kernel);
         if (!spec) { error = std::string("Vulkan kernel not ported: ") + (kernel ? kernel : "(null)"); return false; }
@@ -514,10 +577,12 @@ public:
             error = "Vulkan dispatch exceeds maxComputeWorkGroupCount";
             return false;
         }
-        // Inline uploads submit transfers too. Resolve them before taking the
-        // non-recursive queue/command-pool lock; their BufferRefs stay live
-        // through completion of the dispatch below.
+        // Inline arguments are uploads, which record transfers of their own.
+        // Resolve them before taking the non-recursive queue/command-buffer
+        // lock; `hold` below is what keeps each one alive until the interval
+        // has run, because their BufferRefs end when this call returns.
         std::vector<BufferRef> inline_buffers;
+        std::vector<Buffer*> arg_buffers(args.size());
         std::vector<VkDescriptorBufferInfo> infos(args.size());
         for (size_t i = 0; i < args.size(); ++i) {
             Buffer* b = args[i].buffer;
@@ -531,34 +596,18 @@ public:
                 error = std::string(kernel) + ": buffer exceeds maxStorageBufferRange";
                 return false;
             }
+            arg_buffers[i] = b;
             infos[i] = {b->handle, 0, VkDeviceSize(b->bytes)};
         }
 
         std::lock_guard<std::mutex> lock(dispatch_mutex_);
         ComputePipeline* pipeline = get_pipeline(*spec, error);
         if (!pipeline) return false;
-
-        VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, spec->bindings};
-        VkDescriptorPoolCreateInfo pool_create{};
-        pool_create.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pool_create.maxSets = 1;
-        pool_create.poolSizeCount = 1;
-        pool_create.pPoolSizes = &pool_size;
-        VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
-        VkResult result = vkCreateDescriptorPool(device_, &pool_create, nullptr, &descriptor_pool);
-        if (result != VK_SUCCESS) { error = vk_error("vkCreateDescriptorPool", result); return false; }
-        VkDescriptorSetAllocateInfo set_alloc{};
-        set_alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        set_alloc.descriptorPool = descriptor_pool;
-        set_alloc.descriptorSetCount = 1;
-        set_alloc.pSetLayouts = &pipeline->descriptors;
+        // One pool for the interval, reset when it ends. A pool per dispatch
+        // was three driver calls for a dispatch that had not been submitted
+        // yet (create, allocate, destroy).
         VkDescriptorSet set = VK_NULL_HANDLE;
-        result = vkAllocateDescriptorSets(device_, &set_alloc, &set);
-        if (result != VK_SUCCESS) {
-            error = vk_error("vkAllocateDescriptorSets", result);
-            vkDestroyDescriptorPool(device_, descriptor_pool, nullptr);
-            return false;
-        }
+        if (!acquire_descriptor_set(pipeline->descriptors, set, error)) return false;
         std::vector<VkWriteDescriptorSet> writes(args.size());
         for (uint32_t i = 0; i < args.size(); ++i) {
             writes[i] = {};
@@ -570,20 +619,25 @@ public:
             writes[i].pBufferInfo = &infos[i];
         }
         vkUpdateDescriptorSets(device_, uint32_t(writes.size()), writes.data(), 0, nullptr);
+        for (Buffer* b : arg_buffers) hold(b);
 
-        const bool submitted = submit_sync([&](VkCommandBuffer command) {
+        return record_batch([&](VkCommandBuffer command) {
                 device_barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
                 vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->pipeline);
                 vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->layout,
                                         0, 1, &set, 0, nullptr);
                 vkCmdDispatch(command, uint32_t(groups_x), uint32_t(groups_y), 1);
-            }, "Vulkan compute dispatch", error);
-        vkDestroyDescriptorPool(device_, descriptor_pool, nullptr);
-        return submitted;
+            }, error);
     }
 
-    bool flush(std::string&) override { return true; }  // dispatch is synchronous for this milestone
+    // The batch's turn: submit what has been recorded, once, and wait for it.
+    // Everything above records instead of submitting, so one node is one
+    // queue submission and one wait rather than one per dispatch.
+    bool flush(std::string& error) override {
+        std::lock_guard<std::mutex> lock(dispatch_mutex_);
+        return submit_batch("Vulkan flush", error);
+    }
     void* texture(Buffer* buffer, uint32_t width, uint32_t height,
                   uint32_t row_stride_px, std::string& error) override {
         if (!buffer || width == 0 || height == 0 || row_stride_px < width ||
@@ -666,40 +720,156 @@ private:
             static_cast<unsigned long long>(read_staging_.allocation_bytes));
     }
 
-    // Caller holds dispatch_mutex_: one queue and command pool, and synchronous
-    // completion before any staging allocation or pooled buffer can be reused.
-    template <typename Record>
-    bool submit_sync(Record&& record, const char* operation, std::string& error) {
-        VkCommandBufferAllocateInfo allocate_info{};
-        allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocate_info.commandPool = command_pool_;
-        allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocate_info.commandBufferCount = 1;
-        VkCommandBuffer command = VK_NULL_HANDLE;
-        VkResult result = vkAllocateCommandBuffers(device_, &allocate_info, &command);
-        if (result == VK_SUCCESS) {
-            VkCommandBufferBeginInfo begin{};
-            begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            result = vkBeginCommandBuffer(command, &begin);
-            if (result == VK_SUCCESS) {
-                record(command);
-                result = vkEndCommandBuffer(command);
-            }
-            if (result == VK_SUCCESS) {
-                VkSubmitInfo submit{};
-                submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-                submit.commandBufferCount = 1;
-                submit.pCommandBuffers = &command;
-                result = vkQueueSubmit(queue_, 1, &submit, VK_NULL_HANDLE);
-                if (result == VK_SUCCESS) result = vkQueueWaitIdle(queue_);
-            }
-            vkFreeCommandBuffers(device_, command_pool_, 1, &command);
+    // --- the interval: one command buffer, one submission, one wait --------
+
+    // Opens the interval's command buffer. It is allocated once and re-begun
+    // per interval: every interval ends by submitting and waiting, so one
+    // command buffer serves the engine's whole life, and the pool was created
+    // with RESET_COMMAND_BUFFER_BIT for the reset below.
+    bool begin_batch(std::string& error) {
+        if (batch_open_) return true;
+        if (!batch_command_) {
+            VkCommandBufferAllocateInfo allocate_info{};
+            allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocate_info.commandPool = command_pool_;
+            allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocate_info.commandBufferCount = 1;
+            const VkResult result = vkAllocateCommandBuffers(device_, &allocate_info, &batch_command_);
+            if (result != VK_SUCCESS) { error = vk_error("vkAllocateCommandBuffers", result); return false; }
         }
-        if (result != VK_SUCCESS) { error = vk_error(operation, result); return false; }
+        const VkResult reset = vkResetCommandBuffer(batch_command_, 0);
+        if (reset != VK_SUCCESS) { error = vk_error("vkResetCommandBuffer", reset); return false; }
+        VkCommandBufferBeginInfo begin{};
+        begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        const VkResult result = vkBeginCommandBuffer(batch_command_, &begin);
+        if (result != VK_SUCCESS) { error = vk_error("vkBeginCommandBuffer", result); return false; }
+        batch_open_ = true;
+        batch_staging_used_ = 0;
         return true;
     }
 
+    template <typename Record>
+    bool record_batch(Record&& record, std::string& error) {
+        if (!begin_batch(error)) return false;
+        record(batch_command_);
+        return true;
+    }
+
+    // Keeps a buffer alive until the interval ends. A recording names buffers
+    // by handle, and the caller's handles may all be gone before `flush` --
+    // one of them may even have been handed to the next `alloc`. `pool_stats`
+    // keeps meaning "free is reusable now" because of this, and `trim_pool`
+    // never sees a buffer the device is still going to read.
+    //
+    // Caller holds dispatch_mutex_ (the release side, `close_batch`, does too).
+    void hold(Buffer* buffer) {
+        if (!buffer) return;
+        for (Buffer* held : batch_held_) if (held == buffer) return;
+        retain(buffer);
+        batch_held_.push_back(buffer);
+    }
+
+    // Ends the interval: submit once, wait once, and only then let the pool
+    // see the buffers the command buffer named. Nothing else in this backend
+    // submits. Caller holds dispatch_mutex_.
+    bool submit_batch(const char* operation, std::string& error) {
+        if (!batch_open_) return true;
+        bool ok = true;
+        VkResult result = vkEndCommandBuffer(batch_command_);
+        if (result != VK_SUCCESS) {
+            ok = false;
+        } else if (batch_staging_used_ > 0 &&
+                   !mapped_range(upload_staging_, batch_staging_used_, true, error)) {
+            ok = false;
+        } else {
+            VkSubmitInfo submit{};
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submit.commandBufferCount = 1;
+            submit.pCommandBuffers = &batch_command_;
+            result = vkQueueSubmit(queue_, 1, &submit, VK_NULL_HANDLE);
+            if (result == VK_SUCCESS) result = vkQueueWaitIdle(queue_);
+            if (result != VK_SUCCESS) { error = vk_error(operation, result); ok = false; }
+        }
+        close_batch();
+        return ok;
+    }
+
+    // The interval is over, whether it ran or failed: give the pool back what
+    // the recording named, and return the descriptor sets. One function
+    // because both are only safe after the wait above -- a buffer released
+    // while the device still reads it is the defect the hold exists to
+    // prevent, and a set reset while a submitted command buffer names it is
+    // the same mistake one layer down.
+    void close_batch() {
+        batch_open_ = false;
+        batch_staging_used_ = 0;
+        for (Buffer* buffer : batch_held_) release(buffer);
+        batch_held_.clear();
+        if (batch_pool_) vkResetDescriptorPool(device_, batch_pool_, 0);
+    }
+
+    // A set from the interval's pool. The pool outlives the interval by
+    // design; growing it means ending the interval first, because the sets
+    // already handed out are named by the recorded command buffer.
+    bool acquire_descriptor_set(VkDescriptorSetLayout layout, VkDescriptorSet& out, std::string& error) {
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            if (!batch_pool_ && !grow_descriptor_pool(error)) return false;
+            VkDescriptorSetAllocateInfo allocate{};
+            allocate.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            allocate.descriptorPool = batch_pool_;
+            allocate.descriptorSetCount = 1;
+            allocate.pSetLayouts = &layout;
+            const VkResult result = vkAllocateDescriptorSets(device_, &allocate, &out);
+            if (result == VK_SUCCESS) return true;
+            if (result != VK_ERROR_OUT_OF_POOL_MEMORY) {
+                error = vk_error("vkAllocateDescriptorSets", result);
+                return false;
+            }
+            // More dispatches in one interval than the pool was sized for: run
+            // what is recorded, then try again with twice the pool.
+            if (!submit_batch("Vulkan descriptor set", error)) return false;
+            if (!grow_descriptor_pool(error)) return false;
+        }
+        error = "Vulkan descriptor pool is exhausted";
+        return false;
+    }
+
+    bool grow_descriptor_pool(std::string& error) {
+        const uint32_t sets = batch_pool_sets_ ? batch_pool_sets_ * 2 : kDescriptorSetsPerInterval;
+        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, sets * kMaxBindings};
+        VkDescriptorPoolCreateInfo create{};
+        create.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        create.maxSets = sets;
+        create.poolSizeCount = 1;
+        create.pPoolSizes = &size;
+        VkDescriptorPool pool = VK_NULL_HANDLE;
+        const VkResult result = vkCreateDescriptorPool(device_, &create, nullptr, &pool);
+        if (result != VK_SUCCESS) { error = vk_error("vkCreateDescriptorPool", result); return false; }
+        // Safe to drop the old pool: the only caller reaches this after the
+        // interval that used it has been submitted and waited for.
+        if (batch_pool_) vkDestroyDescriptorPool(device_, batch_pool_, nullptr);
+        batch_pool_ = pool;
+        batch_pool_sets_ = sets;
+        return true;
+    }
+
+    // Every kernel's pipeline, in one pass, so the first frame a kernel is
+    // asked for does not pay for its creation. Filed here rather than in
+    // `initialize`: the specialization the double-float kernels carry is the
+    // fma probe's answer, and the probe is a dispatch. A kernel whose shader is
+    // absent or cannot be built is left to `get_pipeline`, which reports the
+    // failure with the kernel's name at the point of use -- exactly as before.
+    void create_all_pipelines() {
+        for (const KernelSpec& spec : kKernels) {
+            if (pipelines_.count(spec.name)) continue;
+            std::string ignored;
+            get_pipeline(spec, ignored);
+        }
+    }
+
+    // Caller holds dispatch_mutex_: one queue and command pool, and the
+    // interval's command buffer, staging arena and holds.
     static void device_barrier(VkCommandBuffer command, VkPipelineStageFlags destination_stage,
                                VkAccessFlags destination_access) {
         VkMemoryBarrier barrier{};
@@ -726,6 +896,30 @@ private:
         if (!create_buffer(replacement, error, true, readback)) return false;
         destroy_buffer(&staging);
         staging = replacement;
+        return true;
+    }
+
+    // Reserves `bytes` at an aligned offset in the interval's staging arena and
+    // reports where. The interval must be open first: the bump pointer belongs
+    // to it, and opening one is what resets the pointer, so a write that lands
+    // before the open would be at an offset the next upload reuses -- the very
+    // overwrite this arena exists to prevent.
+    bool reserve_staging(size_t bytes, size_t& offset, std::string& error) {
+        if (!begin_batch(error)) return false;
+        const VkDeviceSize alignment = std::max<VkDeviceSize>(4, properties_.limits.nonCoherentAtomSize);
+        if (!upload_staging_.handle || upload_staging_.bytes < batch_staging_used_ + bytes + alignment) {
+            // Growing the arena destroys the buffer it replaces, which a
+            // recorded copy may still name -- so the interval is submitted
+            // first and the offset is chosen from a fresh (zero) pointer. It
+            // only runs while the arena is smaller than an interval's uploads;
+            // after the first frame it is as large as the largest set of
+            // uploads an interval has asked for, and reuses it from zero.
+            if (!submit_batch("Vulkan upload staging", error)) return false;
+            if (!begin_batch(error)) return false;
+            if (!ensure_staging(upload_staging_, bytes + alignment, false, error)) return false;
+        }
+        offset = size_t((batch_staging_used_ + alignment - 1) / alignment * alignment);
+        batch_staging_used_ = offset + bytes;
         return true;
     }
 
@@ -773,15 +967,21 @@ private:
         BufferRef out = allocate(bytes, persistent, error);
         if (!out) return {};
         std::lock_guard<std::mutex> lock(dispatch_mutex_);
-        if (!ensure_staging(upload_staging_, bytes, false, error)) return {};
+        // Every upload in the interval lands at its own offset in the staging
+        // arena, so a second one cannot overwrite bytes a recorded copy has not
+        // read yet. One reused staging buffer per upload -- overwritten the
+        // moment it was recorded -- is what forced each copy into a submission
+        // of its own before this.
+        size_t offset = 0;
+        if (!reserve_staging(bytes, offset, error)) return {};
         if (narrow) {
-            float* dst = static_cast<float*>(upload_staging_.mapped);
+            float* dst = static_cast<float*>(upload_staging_.mapped) + offset / sizeof(float);
             for (size_t i = 0; i < bytes / sizeof(float); ++i) dst[i] = float(narrow[i]);
         } else {
-            std::memcpy(upload_staging_.mapped, raw, bytes);
+            std::memcpy(static_cast<unsigned char*>(upload_staging_.mapped) + offset, raw, bytes);
         }
-        if (!mapped_range(upload_staging_, bytes, true, error)) return {};
-        if (!submit_sync([&](VkCommandBuffer command) {
+        hold(out.get());
+        if (!record_batch([&](VkCommandBuffer command) {
                 device_barrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
                 VkBufferMemoryBarrier host{};
                 host.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -790,14 +990,14 @@ private:
                 host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 host.buffer = upload_staging_.handle;
-                host.offset = 0;
+                host.offset = VkDeviceSize(offset);
                 host.size = VkDeviceSize(bytes);
                 vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_HOST_BIT,
                                      VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
-                VkBufferCopy range{0, 0, VkDeviceSize(bytes)};
+                VkBufferCopy range{VkDeviceSize(offset), 0, VkDeviceSize(bytes)};
                 vkCmdCopyBuffer(command, upload_staging_.handle, out.get()->handle, 1, &range);
                 transfer_written(command);
-            }, "Vulkan upload", error)) return {};
+            }, error)) return {};
         transfer_timing("upload", bytes, start);
         return out;
     }
@@ -1011,6 +1211,25 @@ private:
     std::mutex dispatch_mutex_;
     Buffer upload_staging_;
     Buffer read_staging_;
+    // --- the interval ------------------------------------------------------
+    // One command buffer per flush interval, allocated once because every
+    // interval ends by submitting and waiting.
+    bool batch_open_ = false;
+    VkCommandBuffer batch_command_ = VK_NULL_HANDLE;
+    // Buffers the open command buffer names, retained until the wait. These
+    // are the `pending` of the pool model, kept as holds rather than a queue:
+    // `release` is what makes a buffer reusable, so holding a reference is all
+    // that is needed to keep it out of the next `alloc`'s way.
+    std::vector<Buffer*> batch_held_;
+    // Bytes of `upload_staging_` this interval's uploads have used, at
+    // nonCoherentAtomSize-aligned offsets (a bump arena, reset per interval).
+    size_t batch_staging_used_ = 0;
+    // The interval's descriptor pool; reset when the interval ends.
+    VkDescriptorPool batch_pool_ = VK_NULL_HANDLE;
+    uint32_t batch_pool_sets_ = 0;
+    // Set once every kernel's pipeline has been attempted; the ones that
+    // succeeded are in `pipelines_`, the rest stay on the lazy path.
+    bool pipelines_created_ = false;
     bool transfer_timings_ = false;
     std::vector<Buffer*> buffers_;
     PoolAudit audit_;
