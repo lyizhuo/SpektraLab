@@ -27,7 +27,9 @@ class SpektraLabApp : Application() {
         }
 
     private fun buildEngine(): EngineClient {
-        val resources: File = EngineAssets.ensure(this, version = "v1")
+        // No explicit version: the installation stamp is what makes an app
+        // update re-unpack the engine resources and a plain launch keep them.
+        val resources: File = EngineAssets.ensure(this)
         return EngineClient(resources.absolutePath)
     }
 

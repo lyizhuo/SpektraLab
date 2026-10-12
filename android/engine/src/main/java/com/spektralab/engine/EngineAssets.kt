@@ -9,21 +9,35 @@ import java.io.InputStream
  * `spk_engine_create`.
  *
  * The engine reads its resources through `std::filesystem`, so they have to be
- * real files, not assets. The unpack is keyed by a stamp holding the asset
- * version (the `BuildConfig`-free stand-in is the packaging time written by the
- * build) so an app update replaces the tree once rather than on every launch.
+ * real files, not assets. The unpack is keyed by the installation's own
+ * timestamp: an app update replaces the tree exactly once, and a launch that
+ * did not update anything keeps it. A hard-coded version string would be the
+ * other failure mode -- update the APK, keep the old
+ * `spektrafilm_constants.bin`, and let the engine load resources that no
+ * longer match the library beside them.
  */
 object EngineAssets {
     private const val ASSET_ROOT = "engine"
     private const val STAMP = ".unpacked"
 
-    /** The resources directory, unpacking it first if needed. */
-    fun ensure(context: Context, version: String): File {
+    /** The stamp an installation carries: changes on install and on update. */
+    fun installationStamp(context: Context): String = runCatching {
+        val info = context.packageManager.getPackageInfo(context.packageName, 0)
+        "${info.versionCode}-${info.lastUpdateTime}"
+    }.getOrDefault("unknown")
+
+    /**
+     * The resources directory, unpacking it first if needed. `version`
+     * overrides the installation stamp, which is what the device tests use to
+     * get a fresh tree per run.
+     */
+    fun ensure(context: Context, version: String? = null): File {
+        val stampValue = version ?: installationStamp(context)
         val target = File(context.filesDir, ASSET_ROOT)
         val stamp = File(target, STAMP)
-        if (stamp.isFile && stamp.readText().trim() == version) return target
+        if (stamp.isFile && stamp.readText().trim() == stampValue) return target
         unpack(context, target)
-        stamp.writeText(version)
+        stamp.writeText(stampValue)
         return target
     }
 
