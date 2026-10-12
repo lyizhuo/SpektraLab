@@ -170,6 +170,51 @@ dominate; on a phone GPU the per-dispatch submit-and-wait is expected to be the
 larger share, which is why the patch is in the plan at all. **This row needs a
 GPU device to be meaningful**, and is why item 6 is marked pending above.
 
+## The batching patch's before/after (S2 item 7)
+
+`engine/vulkan-batching` makes the backend submit once per flush interval
+instead of once per dispatch. Measured on the same 12 MP frame, same machine,
+same commands as above (lavapipe, so the *ratio* is what transfers to a phone,
+not the absolute numbers):
+
+|Phase|before ms|after ms|Δ|
+|---|---|---|---|
+|`live` 1600 cold|3631.7|1708.0|−53.0 %|
+|`live` 1600 hot p50|853.8|774.3|−9.3 %|
+|`live` 2048 cold|1668.1|1316.6|−21.1 %|
+|`live` 2048 hot p50|1228.1|1044.6|−14.9 %|
+|`preview` cold|4256.4|3448.5|−19.0 %|
+|`preview` hot p50|3520.1|3012.1|−14.4 %|
+|**`full` export**|**6506.5**|**5326.8**|**−18.1 %**|
+|lever: `striped512`|5926.8|4858.0|−18.0 %|
+|lever: glare+grain off|6065.3|3853.8|−36.5 %|
+
+Quality: **bit-identical**. `spk_render_fixture` rendered
+`android/testdata/portrait_leaves.f32` (667×1000) with grain and glare off on
+both binaries — 2,668,000 samples, max abs 0, mean abs 0, 0 samples over the
+3e-5 bar. The engine's own suite compares every kernel against a float64
+reference and stays green (14/14).
+
+Pool audit at `full` export, unchanged invariants and the two counters that
+moved:
+
+|Counter|before|after|
+|---|---|---|
+|`pending_held`|0|0|
+|`over_releases`|0|0|
+|`live_underflows`|0|0|
+|`allocations`|37|47|
+|`reuses`|1564|1554|
+|peak bytes|1,364,735,984|1,385,203,320 (+1.5 %)|
+|B/px (fresh export)|113.76|115.47|
+
+The ten extra allocations are the retained descriptor pool and the staging
+arena, and they cost 2 MB: +0.15 % of the peak for −18 % of the frame. Two
+counter movements are worth naming rather than hiding: `allocations` is up by
+ten and `reuses` is down by ten (0.6 %), both from that retention. The
+invariants that matter — nothing held past its command buffer, nothing
+over-released, no live underflow — did not move.
+
 ## How to fill the device rows
 
 The device rows are the ones that need hardware. Two routes, both with the
