@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Reading the user's photographs and writing exports: both through the
          system pickers (SAF) and MediaStore, so no storage permission is
@@ -27,6 +28,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- WorkManager runs a long export through its own foreground service;
+             the type has to be declared here, and `dataSync` is the one an
+             export belongs to (it moves the user's own data out of the app).
+             Without this the notification is refused on API 34+ — which is
+             what the release lint flagged. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
     </application>
 
 </manifest>

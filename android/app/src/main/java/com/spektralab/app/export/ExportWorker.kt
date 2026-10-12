@@ -20,6 +20,16 @@ import org.json.JSONObject
  * minutes of GPU work, and it must survive the user switching apps or the
  * activity being recreated.
  *
+ * Progress is reported per *stage* ("decoding", "rendering", "publishing")
+ * rather than from `spk_progress`'s node times, and that is a deliberate
+ * choice: `spk_progress` reads the session's Progress structure, which the
+ * render thread is writing, and the engine documents `spk_cancel` -- not
+ * `spk_progress` -- as safe from another thread. Polling it concurrently
+ * would be a data race on a std::map for the sake of a smoother bar. The
+ * stages do come from inside the export: `decoding` is the full-size decode,
+ * `rendering` is the native render+encode call, `publishing` is the copy into
+ * MediaStore or the picked directory.
+ *
  * The engine is the process-wide one, so a worker never creates a second GPU
  * device; cancelling the work calls `spk_cancel` (safe from any thread) and
  * the render unwinds at the next node boundary, which is what leaves no
