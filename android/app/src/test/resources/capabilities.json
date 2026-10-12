@@ -1,0 +1,40 @@
+{
+ "backend": {
+  "concurrent": true,
+  "gpu": "llvmpipe (LLVM 20.1.2, 256 bits)",
+  "gpu_available": true,
+  "host": "native",
+  "math_mode": "Vulkan probe passed on a CPU device with unfused fma (double-float kernels use an exact Dekker product; full shader parity pending); storage buffers past the advertised 128 MiB maxStorageBufferRange verified by probe on this CPU device",
+  "render_core": "native-vulkan",
+  "session_cache": {
+   "enabled": false,
+   "entries": 0,
+   "hits": 0,
+   "max_entries": 0,
+   "misses": 0,
+   "setup_cam16": 0,
+   "setup_tc_luts": 0
+  },
+  "spectral": "native",
+  "unsupported_features": [
+   "digital_intermediate",
+   "scene_latitude_mapping",
+   "contrast_mask",
+   "overscan",
+   "date_imprint"
+  ],
+  "working_precision": "float32"
+ },
+ "engine": "spektrafilm.native",
+ "max_mp": 151.301008,
+ "max_pixels": 151301008,
+ "max_texture_dimension_2d": 16384,
+ "schema_version": 1,
+ "tiers": {
+  "full": null,
+  "live": 1600,
+  "preview": 3400
+ },
+ "transport_version": 1,
+ "version": "spektrafilm-native 0.1.0 (Oct 12 2026 22:24:56, math=probed)"
+}
