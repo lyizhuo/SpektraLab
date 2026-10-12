@@ -134,9 +134,12 @@ val syncEngineAssets = tasks.register<Sync>("syncEngineAssets") {
 }
 
 // AGP's SourceSet API refuses Provider instances ("Android Studio cannot tell
-// if a provider is generated or static"), so the staged directory is added as
-// a plain path and the task ordering is stated here.
+// if a provider is generated or static"), so the directory is added as a
+// FileCollection that *names its producer*: that is what makes every consumer
+// of the source set (the asset merger and the lint model among them) wait for
+// `syncEngineAssets` instead of discovering the ordering by accident.
 val engineAssetsDir = File(layout.buildDirectory.get().asFile, "generated/engineAssets")
+val engineAssets = files(engineAssetsDir).builtBy(syncEngineAssets)
 
 android {
     namespace = "com.spektralab.engine"
@@ -201,7 +204,7 @@ android {
     }
 
     sourceSets.getByName("main") {
-        assets.srcDir(engineAssetsDir)
+        assets.srcDir(engineAssets)
     }
 
     // The device tests read android/testdata (the cross-platform fixture the
@@ -226,8 +229,3 @@ dependencies {
     androidTestImplementation(libs.kotlinx.coroutines.test)
 }
 
-// Asset merging has to wait for the staging task: the directory above is
-// plain (AGP refuses providers there), so the ordering is explicit.
-tasks.withType<com.android.build.gradle.tasks.MergeSourceSetFolders>().configureEach {
-    if (name.contains("Assets")) dependsOn(syncEngineAssets)
-}
