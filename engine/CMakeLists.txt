@@ -91,6 +91,17 @@ if(NOT APPLE)
     find_program(SPEKTRALAB_GLSLANG NAMES glslangValidator glslang
         HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin")
 
+    # `glslc` compiles the same GLSL through the same front end, but spells the
+    # target differently: `-V` has no equivalent (the shader stage comes from
+    # the file extension) and the environment is named with an `=`. The Android
+    # NDK ships `glslc` and no `glslangValidator`, so `SPEKTRALAB_GLSLANG` may
+    # name either tool (android/README.md).
+    if(SPEKTRALAB_GLSLANG MATCHES "glslc")
+        set(SPEKTRALAB_GLSLANG_KERNEL_FLAGS --target-env=vulkan1.0)
+    else()
+        set(SPEKTRALAB_GLSLANG_KERNEL_FLAGS -V --target-env vulkan1.0)
+    endif()
+
     if(SPEKTRALAB_VULKAN_HEADERS AND SPEKTRALAB_GLSLANG)
         # volk, compiled once as C, with the platform's loader name built in.
         add_library(spk_volk STATIC third_party/volk/volk.c)
@@ -123,7 +134,7 @@ if(NOT APPLE)
             set(spirv "${vulkan_shader_dir}/${kernel}.spv")
             add_custom_command(OUTPUT "${spirv}"
                 COMMAND "${CMAKE_COMMAND}" -E make_directory "${vulkan_shader_dir}"
-                COMMAND "${SPEKTRALAB_GLSLANG}" -V --target-env vulkan1.0
+                COMMAND "${SPEKTRALAB_GLSLANG}" ${SPEKTRALAB_GLSLANG_KERNEL_FLAGS}
                         "-I${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/vulkan"
                         -o "${spirv}" "${shader}"
                 DEPENDS "${shader}" ${vulkan_includes}
