@@ -215,6 +215,23 @@ ten and `reuses` is down by ten (0.6 %), both from that retention. The
 invariants that matter — nothing held past its command buffer, nothing
 over-released, no live underflow — did not move.
 
+### Calibrating the constant
+
+The constant is a build property, so a device's own number goes in without
+touching code:
+
+```bash
+# after a device run recorded source.full_bytes_per_pixel = X
+./gradlew :app:assembleRelease -Pspektralab.bytesPerPixel=$(python3 -c "print($X*1.15)")
+```
+
+The margin is deliberate and asymmetric: **too low means the OS kills the
+process** (the export did not fit and nothing refused it), while too high only
+refuses an export the device could have finished, and the refusal names the
+largest long edge it will accept. Raise it if a capable device is refused;
+lower it only with that device's measured peak in hand. The device's row in the
+table above is where X comes from.
+
 ## How to fill the device rows
 
 The device rows are the ones that need hardware. Two routes, both with the
@@ -241,7 +258,7 @@ largest export.
 
 |Constant|Value|Where it is used|
 |---|---|---|
-|`bytesPerPixel` for the D9 budget|**180** (kept from the plan)|`MemoryBudget.DEFAULT_BYTES_PER_PIXEL`, on the strength of 113.8 B/px measured for a fresh export and 190.7 B/px for an editing session that has already cached live+preview planes|
+|`bytesPerPixel` for the D9 budget|**180** (the plan's value, kept until a device calibrates it)|`MemoryBudget`, on the strength of 113.8 B/px measured for a fresh export and 190.7 B/px for an editing session that has already cached live+preview planes. **Override with `-Pspektralab.bytesPerPixel=<value>` or `spektralab.bytesPerPixel` in `gradle.properties`** — see "Calibrating the constant" below|
 |Fixed headroom|**600 MB**|`MemoryBudget.HEADROOM_BYTES`|
 |RAM fraction|**0.35**|`MemoryBudget.nativeBudgetBytes`|
 |Export session rule|close → re-open → render `full` → release|`EditorViewModel.export`; saves ~0.92 GB at 12 MP|

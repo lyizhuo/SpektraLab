@@ -4,6 +4,22 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// The D9 memory budget's bytes-per-pixel constant (plan D9, "用实测值替换本节与
+// 实现里的常数 180"). It ships at 180 -- the plan's conservative value -- and
+// the *measured* numbers so far are 113.7 B/px for a fresh export session and
+// 190.7 B/px for an editing session that already holds live and preview
+// negatives (android/DEVICE-BASELINE.md, host reference).
+//
+// Calibrating to a device is therefore a property, not a code change:
+//
+//   -Pspektralab.bytesPerPixel=140      (or the same line in gradle.properties)
+//
+// Raise it if a device refuses an export it could finish; lower it only with
+// that device's own measured peak in hand, because too low means the OS kills
+// the process instead of the export being refused.
+val bytesPerPixel: String =
+    (findProperty("spektralab.bytesPerPixel") as String?) ?: "180"
+
 android {
     namespace = "com.spektralab.app"
     compileSdk = 36
@@ -28,6 +44,10 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    defaultConfig {
+        buildConfigField("double", "BYTES_PER_PIXEL", bytesPerPixel)
     }
 
     compileOptions {

@@ -126,7 +126,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                     ?.optJSONArray("unsupported_features")
                     ?.let { array -> (0 until array.length()).map { array.getString(it) }.toSet() }
                     ?: emptySet()
-                val budget = MemoryBudget(totalRamBytes(context))
+                // The bytes-per-pixel constant comes from the build (see
+                // app/build.gradle.kts): 180 unless a device's own measured
+                // peak calibrated it.
+                val budget = MemoryBudget(totalRamBytes(context), BuildConfig.BYTES_PER_PIXEL)
                 _state.value = _state.value.copy(
                     phase = Phase.Ready,
                     capabilities = capabilities,

@@ -157,6 +157,11 @@ an 8 GB device and 25 MP on a 16 GB one (or the refusal naming the largest
 usable long edge), and ten minutes of editing plus three exports with no ANR,
 no native crash and no LMK kill (`adb logcat | grep -E 'FATAL|tombstone'`).
 
+Then calibrate the memory budget to this device: take `full_bytes_per_pixel`
+from the run's `baseline.json` and rebuild with
+`-Pspektralab.bytesPerPixel=<that value × 1.15>` (android/DEVICE-BASELINE.md,
+"Calibrating the constant"), and record the value you used in the device's row.
+
 ## When something fails
 
 |Symptom|What it means|
