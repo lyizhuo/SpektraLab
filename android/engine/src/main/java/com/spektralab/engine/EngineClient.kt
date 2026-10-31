@@ -47,6 +47,32 @@ data class RenderInfo(
     val pending: Boolean,
 )
 
+/**
+ * How much of what was rendered the destination could not hold.
+ *
+ * Raw counts rather than percentages, because the percentages are a formatting
+ * decision and formatting belongs where the words are. The classification is
+ * the engine's, though: it is done on the buffer the engine had already
+ * converted to the destination space, and a second implementation here would be
+ * a second answer to the same question (`AGENTS.md` trap 28).
+ *
+ * `mapped` is a subset of `outside` — the violations were only *negative*, so
+ * desaturating toward white brings the colour in without losing luminance.
+ * `clipped` is the lossy one: a channel above 1 is light the destination cannot
+ * carry at all. A pixel violating both counts as clipped, because clipping
+ * dominates what a reader needs to know.
+ */
+data class GamutCounts(
+    val total: Int = 0,
+    val outside: Int = 0,
+    val mapped: Int = 0,
+    val clipped: Int = 0,
+) {
+    companion object {
+        val EMPTY = GamutCounts()
+    }
+}
+
 data class ExportInfo(
     val path: String,
     val width: Int,
@@ -54,6 +80,8 @@ data class ExportInfo(
     val bytes: Long,
     val format: String,
     val colorSpace: String,
+    /** The three numbers the export page prints under the size line. */
+    val gamut: GamutCounts = GamutCounts.EMPTY,
 )
 
 /**
@@ -294,6 +322,14 @@ class EngineSession internal constructor(
             bytes = reply.json.optLong("bytes"),
             format = reply.json.optString("format"),
             colorSpace = reply.json.optString("color_space"),
+            gamut = reply.json.optJSONObject("gamut")?.let { g ->
+                GamutCounts(
+                    total = g.optInt("total_pixels"),
+                    outside = g.optInt("outside_pixels"),
+                    mapped = g.optInt("mapped_pixels"),
+                    clipped = g.optInt("clipped_pixels"),
+                )
+            } ?: GamutCounts.EMPTY,
         )
     }
 

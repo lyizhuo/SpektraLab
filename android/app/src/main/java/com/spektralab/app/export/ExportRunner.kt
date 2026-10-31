@@ -2,6 +2,7 @@ package com.spektralab.app.export
 
 import android.content.Context
 import android.net.Uri
+import com.spektralab.app.colour.GamutReport
 import com.spektralab.engine.EngineClient
 import com.spektralab.engine.EngineSession
 import org.json.JSONObject
@@ -55,6 +56,7 @@ class ExportRunner(private val context: Context, private val engine: EngineClien
                 bytes = info.bytes,
                 format = spec.format,
                 colorSpace = spec.colorSpace,
+                gamut = GamutReport.from(info.gamut),
             )
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             ExportOutcome.Cancelled

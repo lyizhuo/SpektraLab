@@ -215,12 +215,23 @@ fun ExportPanel(
         }
 
         when (val outcome = state.exportOutcome) {
-            is ExportOutcome.Success -> Text(
-                text = "wrote ${outcome.width}×${outcome.height} ${outcome.format.wire} (${outcome.colorSpace.wire}), " +
-                    "${outcome.bytes / 1024} KiB\n${outcome.uri}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
+            is ExportOutcome.Success -> Column {
+                Text(
+                    text = "wrote ${outcome.width}×${outcome.height} ${outcome.format.wire} (${outcome.colorSpace.wire}), " +
+                        "${outcome.bytes / 1024} KiB\n${outcome.uri}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                // The row the design draws under the size line: the product
+                // saying how much of the render the destination could not hold,
+                // rather than handing back a file and letting the viewer decide.
+                Text(
+                    text = outcome.gamut.label(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    modifier = Modifier.testTag("export-gamut"),
+                )
+            }
             is ExportOutcome.Refused -> Text(
                 text = "refused: ${outcome.reason} (largest available ${outcome.maxLongEdge} px)",
                 style = MaterialTheme.typography.bodySmall,

@@ -124,6 +124,15 @@ sealed interface ExportOutcome {
         val bytes: Long,
         val format: ExportFormat,
         val colorSpace: ExportColorSpace,
+        /**
+         * How much of the render the destination could not hold.
+         *
+         * Counted by the engine on the buffer it had already converted to the
+         * destination space, so it describes *this file* rather than a sample of
+         * the photograph. This is the row under the size line: the product's
+         * claim that it says so when it could not give you everything.
+         */
+        val gamut: com.spektralab.app.colour.GamutReport = com.spektralab.app.colour.GamutReport.EMPTY,
     ) : ExportOutcome
 
     /**

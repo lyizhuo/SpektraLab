@@ -732,6 +732,56 @@ JNIEXPORT jstring JNICALL Java_com_spektralab_engine_EngineNative_exportImage(JN
         reply.set("bytes", spk::Json(double(bytes.size())));
         reply.set("format", spk::Json(format));
         reply.set("color_space", spk::Json(space));
+
+        // The three numbers the export page prints under the size line:
+        //
+        //     超出目标色域 1.8% · 被映射 0.6% · 被夹限 0.1%
+        //
+        // Counted here, on `linear`, because that vector is *already* in the
+        // destination space -- `transform.to_linear` put it there. A Kotlin
+        // copy of this classification would be a second answer to the same
+        // question, and the second answer is the one that goes wrong silently
+        // (AGENTS.md trap 28).
+        //
+        // The categories, and why `mapped` and `clipped` are not just "outside":
+        //
+        //   outside -- some channel left [0, 1]; the destination cannot hold it
+        //   mapped  -- the violations are only *negative*. The colour is outside
+        //              the destination's triangle but at a representable light
+        //              level, so desaturating toward the white point brings it
+        //              in without losing luminance. Recoverable.
+        //   clipped -- some channel exceeds 1. That is light the destination
+        //              cannot carry at all. Lossy, and the one that matters.
+        //
+        // A pixel violating both counts as clipped: clipping is the lossier
+        // treatment and it dominates what the user needs to know.
+        {
+            size_t outside = 0;
+            size_t mapped = 0;
+            size_t clipped = 0;
+            const size_t pixels = size_t(width) * height;
+            for (size_t p = 0; p < pixels; ++p) {
+                const float r = linear[p * 3 + 0];
+                const float g = linear[p * 3 + 1];
+                const float b = linear[p * 3 + 2];
+                const float lo = std::min(r, std::min(g, b));
+                const float hi = std::max(r, std::max(g, b));
+                if (lo < 0.0f || hi > 1.0f) {
+                    ++outside;
+                    if (hi > 1.0f) {
+                        ++clipped;
+                    } else {
+                        ++mapped;
+                    }
+                }
+            }
+            spk::Json gamut = spk::Json::object();
+            gamut.set("total_pixels", spk::Json(double(pixels)));
+            gamut.set("outside_pixels", spk::Json(double(outside)));
+            gamut.set("mapped_pixels", spk::Json(double(mapped)));
+            gamut.set("clipped_pixels", spk::Json(double(clipped)));
+            reply.set("gamut", gamut);
+        }
     }
     reply.set("ok", spk::Json(true));
     reply.set("status", spk::Json(double(SPK_OK)));

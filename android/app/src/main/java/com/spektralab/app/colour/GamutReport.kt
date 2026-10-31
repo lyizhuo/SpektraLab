@@ -72,6 +72,21 @@ data class GamutReport(
         val EMPTY = GamutReport(0, 0, 0, 0)
 
         /**
+         * The report the engine already counted for an export.
+         *
+         * The engine classifies on the buffer it converted to the destination
+         * space, so these numbers describe *that file* rather than a sample of
+         * the photograph — and this conversion exists only so the panel can
+         * format them. The classification is deliberately not repeated here.
+         */
+        fun from(counts: com.spektralab.engine.GamutCounts): GamutReport = GamutReport(
+            totalPixels = counts.total,
+            outsidePixels = counts.outside,
+            mappedPixels = counts.mapped,
+            clippedPixels = counts.clipped,
+        )
+
+        /**
          * Classify [rgb] — tightly packed linear RGB, three floats per pixel.
          *
          * [stride] is float offsets between pixels (3 for packed RGB, 4 for
