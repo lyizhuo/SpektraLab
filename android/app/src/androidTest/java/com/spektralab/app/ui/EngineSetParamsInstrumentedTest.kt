@@ -79,6 +79,47 @@ class EngineSetParamsInstrumentedTest {
     }
 
     @Test
+    fun aSecondFrameCanStillBeEditedAfterTheFirst() = runBlocking {
+        // The crop case in the flow test passes alone and fails when it runs
+        // second, and the only thing the case before it does differently is
+        // open a photograph first. So the question is not about crops: it is
+        // whether a session opened *after* another one still accepts edits.
+        // Opening a second frame is the most ordinary thing an editor does.
+        client.start()
+
+        val first = fixture("setparams-first.png")
+        val fdA = android.os.ParcelFileDescriptor
+            .open(first, android.os.ParcelFileDescriptor.MODE_READ_ONLY)
+        val sessionA = client.open(fdA.detachFd(), first.name, halfSize = true)
+        sessionA.renderInto("live", reprint = false, reuse = null)
+        client.closeSession()
+
+        val second = fixture("setparams-second.png")
+        val fdB = android.os.ParcelFileDescriptor
+            .open(second, android.os.ParcelFileDescriptor.MODE_READ_ONLY)
+        val sessionB = client.open(fdB.detachFd(), second.name, halfSize = true)
+        try {
+            sessionB.renderInto("live", reprint = false, reuse = null)
+            val updated = sessionB.setParams(
+                JSONObject().apply {
+                    put("geometry_crop_x", 0.1)
+                    put("geometry_crop_y", 0.1)
+                    put("geometry_crop_w", 0.8)
+                    put("geometry_crop_h", 0.8)
+                },
+            )
+            assertEquals(
+                "a second session does not accept the crop: the editor cannot open twice",
+                0.8,
+                updated.optDouble("geometry_crop_w", 1.0),
+                1e-6,
+            )
+        } finally {
+            client.closeSession()
+        }
+    }
+
+    @Test
     fun aGeometryChangeReachesTheEngineToo() = runBlocking {
         // The crop case in the flow test fails the same way, so the two are
         // checked separately rather than assumed to share a cause.

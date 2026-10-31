@@ -98,7 +98,7 @@ class EditorFlowTest {
         val uri = pushFixture("flow-import.png")
         show(uri, "flow-import.png")
         viewModel.open(uri, "flow-import.png")
-        awaitFrame("the first render")
+        awaitFrame("the first render", "flow-import.png")
 
         val state = viewModel.state.value
         assertEquals(EditorViewModel.Phase.Ready, state.phase)
@@ -128,7 +128,7 @@ class EditorFlowTest {
         val uri = pushFixture("flow-params.png")
         show(uri, "flow-params.png")
         viewModel.open(uri, "flow-params.png")
-        awaitFrame("the first render")
+        awaitFrame("the first render", "flow-params.png")
         val before = digest(requireNotNull(viewModel.state.value.bitmap))
         val previousRender = viewModel.state.value.lastRender
 
@@ -151,7 +151,7 @@ class EditorFlowTest {
         val uri = pushFixture("flow-slider.png")
         show(uri, "flow-slider.png")
         viewModel.open(uri, "flow-slider.png")
-        awaitFrame("the first render")
+        awaitFrame("the first render", "flow-slider.png")
 
         rule.onNodeWithTag("tool-params").performClick()
         rule.onNodeWithTag("group-Enlarger").performScrollTo().performClick()
@@ -173,7 +173,7 @@ class EditorFlowTest {
         val uri = pushFixture("flow-crop.png")
         show(uri, "flow-crop.png")
         viewModel.open(uri, "flow-crop.png")
-        awaitFrame("the first render")
+        awaitFrame("the first render", "flow-crop.png")
 
         // Start from a crop the map can actually drag (these are the very
         // fields the drag writes, so it is the same path).
@@ -236,7 +236,7 @@ class EditorFlowTest {
         val uri = pushFixture("shot-phone.png")
         rule.setContent { AtWidth(420.dp, uri, "shot-phone.png") }
         viewModel.open(uri, "shot-phone.png")
-        awaitFrame("the phone-width render")
+        awaitFrame("the phone-width render", "shot-phone.png")
         rule.onNodeWithTag("canvas-phone").assertExists()
         rule.onNodeWithTag("canvas-wide").assertDoesNotExist()
         capture("phone-420dp.png")
@@ -247,7 +247,7 @@ class EditorFlowTest {
         val uri = pushFixture("shot-tablet.png")
         rule.setContent { AtWidth(1000.dp, uri, "shot-tablet.png") }
         viewModel.open(uri, "shot-tablet.png")
-        awaitFrame("the tablet-width render")
+        awaitFrame("the tablet-width render", "shot-tablet.png")
         rule.onNodeWithTag("canvas-wide").assertExists()
         rule.onNodeWithTag("canvas-phone").assertDoesNotExist()
         capture("tablet-1000dp.png")
@@ -302,10 +302,18 @@ class EditorFlowTest {
         return Uri.fromFile(target)
     }
 
-    private fun awaitFrame(what: String, timeoutMillis: Long = 180_000) {
-        awaitCondition("$what to produce a frame", timeoutMillis) {
+    private fun awaitFrame(what: String, name: String, timeoutMillis: Long = 180_000) {
+        // Waiting for "a frame is present" is not enough: `open` is async and
+        // the state still holds the previous photograph's bitmap and the Ready
+        // phase while it runs, so that condition is true instantly, on a stale
+        // picture. Everything after it then races the open. This is why the
+        // cases pass alone and fail in a class -- alone there is no previous
+        // bitmap for the condition to be satisfied by (AGENTS.md trap 24: the
+        // test did not own its inputs, and the failure named the wrong subject).
+        awaitCondition("$what to produce a frame of $name", timeoutMillis) {
             val state = viewModel.state.value
-            state.bitmap != null && !state.busy && state.phase == EditorViewModel.Phase.Ready
+            state.source?.name == name && state.bitmap != null && !state.busy &&
+                state.phase == EditorViewModel.Phase.Ready
         }
     }
 
