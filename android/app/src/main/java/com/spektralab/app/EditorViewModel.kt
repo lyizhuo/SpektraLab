@@ -187,12 +187,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 val before = opened.params
                 val fields = delta.keys().asSequence().toSet()
-                val merged = undoStack.record(before, fields, System.currentTimeMillis())
-                if (!merged) {
-                    // A new step starts here: the state to undo *to* is the one
-                    // the engine held before this change.
-                    undoStack.record(before, fields, System.currentTimeMillis())
-                }
+                // One call. `record` pushes the step itself when the change
+                // cannot merge into the one before it, so the old
+                // `if (!merged) record(...)` pushed the same snapshot **twice**
+                // for every edit that did not coalesce: two identical undo
+                // steps per change, so one press of undo appeared to move half
+                // a step, and the stack ran out at half the presses it should
+                // have needed. `UndoStack` was never the problem.
+                undoStack.record(before, fields, System.currentTimeMillis())
                 val params = opened.setParams(delta)
                 geometry = params.filterGeometry()
                 _state.value = _state.value.copy(

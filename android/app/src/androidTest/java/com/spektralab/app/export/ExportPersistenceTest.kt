@@ -124,6 +124,14 @@ class ExportPersistenceTest {
         }
 
         // The app "restarts": a new view model over the same file.
+        //
+        // A real restart clears this view model first, and `onCleared` is what
+        // writes the sidecar. `onCleared` is protected, so the test asks for the
+        // same write through the public door. Without it nothing had ever been
+        // stored for this frame, and the assertion was measuring the absence of
+        // a save rather than the presence of a restore.
+        first.saveEdits()
+
         val second = viewModel()
         second.boot()
         awaitCondition("the second engine") { second.state.value.capabilities != null }

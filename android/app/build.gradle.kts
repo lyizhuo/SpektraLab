@@ -89,6 +89,11 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     testImplementation(libs.junit)
+    // `org.json` is Android-only at run time: the framework stub throws
+    // "not mocked" on the JVM, so a plain unit test cannot build a JSONObject.
+    // `UndoStack` takes one as its snapshot type, which makes this the shortest
+    // path to testing the stack without a device.
+    testImplementation(libs.json)
     testImplementation(libs.kotlinx.coroutines.test)
 
     androidTestImplementation(platform(libs.compose.bom))
