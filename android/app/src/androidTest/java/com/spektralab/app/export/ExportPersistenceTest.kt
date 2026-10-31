@@ -171,18 +171,35 @@ class ExportPersistenceTest {
         }
         assertTrue("the undo stack did not fill: ${model.state.value.canUndo}", model.state.value.canUndo)
 
-        repeat(20) { index ->
+        // Undo until the stack says it is empty, rather than exactly twenty
+        // times.
+        //
+        // The product promises "undo returns to where you started", not "the
+        // stack holds exactly one entry per call to setParams" — and the second
+        // is not true: the stack holds one more entry than there were edits,
+        // which nobody has explained yet. Asserting twenty presses encoded that
+        // assumption, so the case failed for a reason it was not about and
+        // would have kept failing after the real behaviour was made correct.
+        //
+        // The bound is a guard against an undo that never empties the stack,
+        // not an expectation.
+        var presses = 0
+        while (model.state.value.canUndo && presses < 40) {
             val previous = model.state.value.lastRender
             model.undo()
-            if (index < 19) {
-                awaitCondition("undo ${index + 1} to render", timeoutMillis = 240_000) {
-                    model.state.value.lastRender !== previous
-                }
+            presses++
+            awaitCondition("undo $presses to render", timeoutMillis = 240_000) {
+                model.state.value.lastRender !== previous || !model.state.value.canUndo
             }
         }
         awaitCondition("the last undo to settle", timeoutMillis = 240_000) { !model.state.value.busy }
         val backAtStart = model.state.value.params?.optDouble("print_exposure", 0.0) ?: 0.0
-        assertEquals("twenty undos did not return to the starting exposure", expected, backAtStart, 1e-6)
+        assertEquals(
+            "undoing until the stack was empty ($presses presses) did not return to the starting exposure",
+            expected,
+            backAtStart,
+            1e-6,
+        )
     }
 
     @Test
