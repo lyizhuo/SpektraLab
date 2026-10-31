@@ -39,55 +39,69 @@ ProPhoto.
 
 ## Where it stands, measured 2026-11-01
 
-The encoder **works once** and **aborts on the second encode in a process**.
+**The encoder works.** x265 (10-bit) behind libheif, both ABIs, seven
+instrumented cases green including eight encodes in a row in one process.
 
-What was verified on `Pixel_9_Pro(AVD) - 16` before the abort:
+What is verified on `Pixel_9_Pro(AVD) - 16`:
 
-- `libheif <version> (HEVC via kvazaar, kvazaar)` — the library and the encoder
-  are both present.
-- A 10-bit encode produces a well-formed ISO-BMFF file: `ftyp` at offset 4,
-  major brand `mif1`, `heic` among the compatible brands.
+- `libheif <version>` reports itself and has an HEVC encoder.
+- A 10-bit encode is a well-formed ISO-BMFF file: `ftyp` at offset 4, and the
+  major brand is **`heix`** — the >8-bit HEVC image brand, which is the file
+  saying it holds more than 8 bits. (`heic` is the 8-bit form, `mif1` generic
+  HEIF; libheif writes whichever the encoder produced.)
 - The ICC profile is embedded **byte for byte** (a 64-byte slice of `sRGB.icc`
   from offset 128 is found in the output).
 - The colour travels in a `colr` box typed `prof`, not as an `nclx` enum —
   which is the whole reason for this dependency.
 - 8-bit and 12-bit are **refused**, not silently downgraded.
+- **Eight encodes in one process do not abort it.**
 
-Then:
+`HeifEncodeInstrumentedTest` is un-`@Ignore`d. It carries the repetition case
+because the failure it was written for only appeared on the second encode.
+
+### The abort was kvazaar, and switching encoders fixed it
+
+With **kvazaar** as the HEVC encoder, the second encode in a process aborted:
 
 ```
-F libc : FORTIFY: pthread_mutex_destroy called on a destroyed mutex (0x...)
-F libc : Fatal signal 6 (SIGABRT) ... in tid ... (roidJUnitRunner)
-Abort message: 'FORTIFY: pthread_mutex_destroy called on a destroyed mutex'
-  #04 pc ... libspektralab.so
+FORTIFY: pthread_mutex_destroy called on a destroyed mutex
+Fatal signal 6 (SIGABRT) ... libspektralab.so
 ```
 
-Raising `threads` to 1 does not avoid it. That points at the encoder's own
-teardown (kvazaar's thread pool or libheif's plugin registry) rather than at the
-caller. `HeifEncodeInstrumentedTest` therefore carries a class-level `@Ignore`
-with this text: a red `connectedDebugAndroidTest` aborts the whole run and would
-hide every other failure.
+Setting the encoder to one thread did not avoid it. Rebuilding the same
+`heif_encode.cpp` against **x265** (`HIGH_BIT_DEPTH=ON`) made the abort
+disappear with no change to the calling code, which localises the bug to
+kvazaar's plugin teardown rather than to libheif or to this file. kvazaar is no
+longer built.
+
+### What is still missing: the render→encode bridge
+
+`ExportRunner` asks the *engine* to write a file (`session.export(path, spec)`),
+and the engine has no HEIF writer — by design, `ARCHITECTURE.md` §8.8 puts file
+writing in the host. So a HEIC export needs the render's 16-bit pixels in
+memory, handed to `LibheifWriter.encodeRgba16`, not a path handed to the engine.
+
+That bridge does not exist, so **the picker does not offer HEIC**:
+`ExportFormats.offered()` returns only the four formats the engine's writer
+produces, and `ExportFormats.pendingReason()` is what the panel prints beside
+the two it cannot. This is deliberate — the HEIC enum values existed before
+anything could write one, and the panel rendered `ExportFormat.entries`, so the
+app briefly offered two chips that would have failed at the end of a full
+render. `ExportFormatsTest` pins both directions.
 
 ## The order of work when this resumes
 
-1. **Fix the abort, or move encoders.** It is a double-destroy in teardown, so
-   the candidates are (a) the kvazaar plugin's `dealloc` path, (b) libheif's
-   plugin registry when `ENABLE_PLUGIN_LOADING=OFF`. Switching to x265 with
-   `-DHIGH_BIT_DEPTH=ON` is the cheap experiment: it is a different encoder
-   behind the same libheif call, and if the abort disappears the bug is in
-   kvazaar's plugin rather than in libheif.
-2. **Decide 8-bit vs 10-bit as a product question.** kvazaar is one bit depth
-   per build (`KVZ_BIT_DEPTH`), and libheif *compares against that same macro*
-   (`encoder_kvazaar.cc`, `if (bit_depth != KVZ_BIT_DEPTH)`), so **both** the
-   library and libheif must be compiled with the same `-DKVZ_BIT_DEPTH`. Getting
-   this wrong yields "Bit depth not supported by kvazaar" for every encode. If
-   8-bit HEIC is wanted too, that is two builds and a runtime choice.
-3. **A decoder.** The platform's HEIF decoder is 8-bit, so a 10-bit file cannot
-   be read back with `BitmapFactory` — a round-trip test needs libheif built
-   with `libde265`, which is a second dependency for tests only.
-4. Then implement `HeicWriter` with `supportsIcc = true` and wire the export
-   page. `HeicColorPolicyTest` should pass unchanged, which is the point of
-   having written the rule first.
+1. **Render to memory.** The engine already has a 16-bit PNG writer in
+   `jni/png16.cpp`; what is needed is the pixels without a file, either a
+   `render_to_buffer` entry point or reading back the PNG the engine can
+   already produce and decoding it as 16-bit in Kotlin (`BitmapFactory` will
+   not do — it decodes 16-bit PNG to 8-bit `ARGB_8888`).
+2. Then `ExportFormats.offered` gains `Heic10`, and `LibheifWriter` is already
+   the writer it needs.
+3. Gain maps (ISO 21496-1) are still untouched: libheif writes them, but this
+   product has no HDR headroom to declare until the export path can carry more
+   than one rendition.
+
 
 ## Two build obstacles, both solved
 

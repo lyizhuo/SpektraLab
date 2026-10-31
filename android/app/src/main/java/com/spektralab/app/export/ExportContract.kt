@@ -29,6 +29,61 @@ enum class ExportFormat(val wire: String, val mime: String, val extension: Strin
     val needsIccProfile: Boolean get() = this == Heic10 || this == Heic8
 }
 
+/**
+ * Which formats the export pipeline can actually produce.
+ *
+ * The distinction this exists to make is between *the enum has a value* and
+ * *the pipeline can write it*. `ExportRunner` asks the engine to render into a
+ * file, and the engine writes TIFF, PNG and JPEG; it has no HEIF writer, by
+ * design (`ARCHITECTURE.md` §8.8 — the engine returns pixels, the host writes
+ * files). HEIC is written by [com.spektralab.app.export.heic.LibheifWriter]
+ * instead, which means it needs the render's 16-bit pixels handed over rather
+ * than a path handed to the engine, and **that bridge does not exist yet**.
+ *
+ * So until it does, HEIC must not appear in the picker: an offered format that
+ * fails at the end of a long render is worse than an absent one, and a chip
+ * that sends `heic10` to an engine that has never heard of it is a guaranteed
+ * failure dressed as a choice.
+ *
+ * [heicPending] is what the picker shows instead — greyed, with this as the
+ * reason — because the same rule applies here as on the parameter panel: a
+ * control that is not available has to be able to say why.
+ */
+object ExportFormats {
+
+    /** Formats the engine's own writer can produce. */
+    val engineWritten: List<ExportFormat> = listOf(
+        ExportFormat.Tiff16,
+        ExportFormat.Png16,
+        ExportFormat.Png8,
+        ExportFormat.Jpeg8,
+    )
+
+    /**
+     * Formats this build can write, given whether a HEIF writer is linked.
+     *
+     * When the render→encoder bridge lands, this is the one line that changes:
+     * `if (hasHeifWriter) engineWritten + ExportFormat.Heic10`.
+     */
+    fun offered(hasHeifWriter: Boolean): List<ExportFormat> {
+        // TODO(heic): return engineWritten + Heic10 when the bridge exists.
+        // The flag is deliberately unused rather than removed: the signature is
+        // what the caller already threads through, and the day it becomes true
+        // this function must change, which is the point of keeping it.
+        check(hasHeifWriter || true)
+        return engineWritten
+    }
+
+    /** The reason to show beside a format this build cannot produce. */
+    fun pendingReason(format: ExportFormat): String? = when (format) {
+        ExportFormat.Heic10 ->
+            "编码器已可用，但渲染结果还没有接到它上面：导出通路仍由引擎直接写 TIFF/PNG/JPEG。"
+        ExportFormat.Heic8 ->
+            "HEIC 编码器是 10-bit 的，8-bit 版本它产不出来。"
+        else -> null
+    }
+}
+
 /** The colour spaces the host's writers have profiles for. */
 enum class ExportColorSpace(val wire: String) {
     Srgb("sRGB"),

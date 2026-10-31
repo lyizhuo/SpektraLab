@@ -80,13 +80,18 @@ if(SPEKTRALAB_WITH_HEIF)
 
     target_sources(spektralab_android PRIVATE "${SPEKTRALAB_ANDROID_JNI}/heif_encode.cpp")
     target_include_directories(spektralab_android PRIVATE "${heif_dir}/include")
-    # kvazaar after libheif: libheif calls into it, and these are static
-    # archives, so link order is the algorithm.
-    target_link_libraries(spektralab_android PRIVATE
-        "${heif_dir}/lib/libheif.a"
-        "${heif_dir}/lib/libkvazaar.a")
+    # The HEVC encoder comes after libheif, because these are static archives
+    # and link order is the algorithm. Which one is built into a prefix is the
+    # script's decision; both are listed so a prefix carrying either links.
+    target_link_libraries(spektralab_android PRIVATE "${heif_dir}/lib/libheif.a")
+    foreach(hevc kvazaar x265)
+        if(EXISTS "${heif_dir}/lib/lib${hevc}.a")
+            target_link_libraries(spektralab_android PRIVATE "${heif_dir}/lib/lib${hevc}.a")
+            message(STATUS "HEIC HEVC encoder: ${hevc}")
+        endif()
+    endforeach()
     target_compile_definitions(spektralab_android PRIVATE SPEKTRALAB_WITH_HEIF=1)
-    message(STATUS "HEIC encoder: libheif + kvazaar from ${heif_dir}")
+    message(STATUS "HEIC encoder: libheif from ${heif_dir}")
 endif()
 
 target_compile_features(spektralab_android PRIVATE cxx_std_20)

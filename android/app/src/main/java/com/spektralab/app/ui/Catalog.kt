@@ -257,6 +257,68 @@ object ParamsCatalog {
     )
 
     /**
+     * How a refused family explains itself.
+     *
+     * A group whose every control is hidden leaves a hole in the panel, and a
+     * hole teaches nobody anything: the prototype draws 片边 and 日期后背 as
+     * real sections, so a user who has seen the design will look for them and
+     * find nothing. The rule is the design notes' §8.3 — **a control that is
+     * not available must be able to state why**.
+     *
+     * This does not contradict `visibleFields`, which still removes the
+     * individual controls (plan D6: a refused *field* must never be reachable,
+     * because the engine rejects it by name). Two different questions: the
+     * field list is what the panel may *send*, and a section is what it may
+     * *say*.
+     */
+    data class RefusedSection(
+        val family: String,
+        val title: String,
+        val detail: String,
+    )
+
+    private val refusedSectionInfo: Map<String, RefusedSection> = listOf(
+        RefusedSection(
+            family = "overscan",
+            title = "片边",
+            detail = "Vulkan 后端未移植片边合成：齿孔、边缘字样和框线都不会出现。",
+        ),
+        RefusedSection(
+            family = "date_imprint",
+            title = "日期后背",
+            detail = "Vulkan 后端未移植日期曝光：右下角不会烧录日期。",
+        ),
+        RefusedSection(
+            family = "scene_latitude_mapping",
+            title = "场景置位",
+            detail = "宽容度分析可用，但把结果应用到画面的那一步后端拒绝执行。",
+        ),
+        RefusedSection(
+            family = "contrast_mask",
+            title = "对比蒙版",
+            detail = "Vulkan 后端未移植对比蒙版。",
+        ),
+        RefusedSection(
+            family = "digital_intermediate",
+            title = "数字中间片",
+            detail = "Vulkan 后端未移植数字中间片导出。",
+        ),
+    ).associateBy { it.family }
+
+    /**
+     * The sections this device cannot show, in the order the panel prints them.
+     *
+     * Empty on a backend that supports them, which is the point: nothing here
+     * is hard-coded to "Android cannot do film edges". It is read from
+     * `capabilities.backend.unsupported_features`, so the day the port lands
+     * these turn into real controls with no change to the panel.
+     */
+    fun refusedSections(unsupportedFeatures: Set<String>): List<RefusedSection> =
+        listOf("overscan", "date_imprint", "scene_latitude_mapping", "contrast_mask", "digital_intermediate")
+            .filter { it in unsupportedFeatures }
+            .mapNotNull { refusedSectionInfo[it] }
+
+    /**
      * The fields worth showing on this device: the schema has to know the name
      * (an engine that dropped a field must not get it sent), and the field's
      * family must not be one the backend refuses.

@@ -30,7 +30,9 @@ import com.spektralab.app.EditorViewModel
 import com.spektralab.app.export.ExportColorSpace
 import com.spektralab.app.export.ExportFormat
 import com.spektralab.app.export.ExportOutcome
+import com.spektralab.app.export.ExportFormats
 import com.spektralab.app.export.ExportSpec
+import com.spektralab.app.export.heic.LibheifWriter
 import com.spektralab.app.export.ExportTarget
 import kotlin.math.roundToInt
 
@@ -64,6 +66,11 @@ fun ExportPanel(
     var target by remember { mutableStateOf(ExportTarget.Album) }
     var directory by remember { mutableStateOf<Uri?>(null) }
 
+    // Asked once per composition, and it answers "is there an encoder in this
+    // .so" rather than "is it wired up" — `ExportFormats.offered` is what draws
+    // the line, and it currently draws it before this flag matters.
+    val heifWriterAvailable = remember { runCatching { LibheifWriter().usable }.getOrDefault(false) }
+
     val spec = ExportSpec(
         format = format,
         colorSpace = colorSpace,
@@ -92,7 +99,11 @@ fun ExportPanel(
 
         Text("Format", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (candidate in ExportFormat.entries) {
+            // Only what the pipeline can actually write. The enum has six
+            // values and the engine's writer produces four of them; offering
+            // the other two would fail after a full render, which is the worst
+            // possible moment to discover it.
+            for (candidate in ExportFormats.offered(heifWriterAvailable)) {
                 FilterChip(
                     selected = format == candidate,
                     onClick = { format = candidate },
@@ -100,6 +111,21 @@ fun ExportPanel(
                     modifier = Modifier.testTag("export-format-${candidate.wire}"),
                 )
             }
+        }
+        // The formats that exist on the wire but not in this build say so,
+        // rather than vanishing: a user who has seen HEIC in the design notes
+        // should find it addressed.
+        for (candidate in ExportFormat.entries) {
+            if (candidate in ExportFormats.offered(heifWriterAvailable)) continue
+            val reason = ExportFormats.pendingReason(candidate) ?: continue
+            Text(
+                text = "${candidate.wire}：$reason",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .testTag("export-format-pending-${candidate.wire}"),
+            )
         }
 
         Text("Colour space", style = MaterialTheme.typography.titleSmall)

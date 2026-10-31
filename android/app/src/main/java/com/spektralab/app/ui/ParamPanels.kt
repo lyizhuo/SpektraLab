@@ -31,6 +31,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.spektralab.app.EditorViewModel
@@ -96,6 +98,72 @@ fun ParamGroups(
                 }
             }
         }
+        // A section this backend refuses keeps its place and states its reason
+        // instead of vanishing. The container is deliberately the same shape as
+        // a real group header, greyed, so the panel does not reflow when the
+        // port lands — it gains controls where a notice used to be.
+        RefusedSections(ParamsCatalog.refusedSections(state.unsupportedFeatures))
+    }
+}
+
+/**
+ * The unavailable sections, as a composable that takes plain data.
+ *
+ * Split out from [ParamGroups] so a test can draw it without an
+ * [EditorViewModel]: on the backend this app ships, these families are always
+ * refused, so the *notice* is the always-reachable part of the panel and the
+ * part worth checking. The alternative is a test that boots the engine to look
+ * at a greyed label, which is a test about the engine.
+ */
+@Composable
+fun RefusedSections(sections: List<ParamsCatalog.RefusedSection>) {
+    for (section in sections) {
+        RefusedSectionBlock(section)
+    }
+}
+
+/**
+ * One unavailable section: its title, and the one line that says why.
+ *
+ * `contentDescription` carries the reason too, which is what makes this
+ * checkable in a test and readable by a screen reader — a greyed row whose
+ * explanation exists only as colour is not an explanation.
+ */
+@Composable
+private fun RefusedSectionBlock(section: ParamsCatalog.RefusedSection) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+            .testTag("refused-${section.family}"),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f))
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = section.title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = "本平台不可用",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+            )
+        }
+        Text(
+            text = section.detail,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+            modifier = Modifier
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .semantics { contentDescription = "${section.title}：${section.detail}" },
+        )
     }
 }
 
