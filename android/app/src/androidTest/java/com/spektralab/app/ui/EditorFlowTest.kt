@@ -35,6 +35,7 @@ import com.spektralab.engine.RenderInfo
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -69,7 +70,23 @@ class EditorFlowTest {
 
     private val context: Context get() = InstrumentationRegistry.getInstrumentation().targetContext
 
-    private val viewModel: EditorViewModel by lazy { sharedViewModel(context.applicationContext as Application) }
+    /**
+     * Booted in [setUp], off the main thread.
+     *
+     * It used to be `by lazy`, evaluated from inside the composable — and the
+     * lazy's wait loop called `Thread.sleep` on the main thread, which is the
+     * only thread `viewModelScope` can resume on. The two blocked each other
+     * until the deadline, and the assertion then reported
+     * "the engine did not start: null", because the phase was still Booting and
+     * `error` had never been set. A boot that never finished looked exactly
+     * like a boot that failed silently.
+     */
+    private lateinit var viewModel: EditorViewModel
+
+    @Before
+    fun setUp() {
+        viewModel = sharedViewModel(context.applicationContext as Application)
+    }
 
     private val fixtureWidth = 192
     private val fixtureHeight = 128
@@ -100,7 +117,7 @@ class EditorFlowTest {
 
         rule.waitForIdle()
         rule.onNodeWithTag("film-strip").assertExists()
-        rule.onNodeWithTag("tool-develop").assertExists()
+        rule.onNodeWithTag("tool-params").assertExists()
         rule.onNodeWithTag("strip-add-photos").assertExists()
     }
 
@@ -116,7 +133,7 @@ class EditorFlowTest {
         val previousRender = viewModel.state.value.lastRender
 
         // Through the UI: the Develop tool, the Grain group, its switch.
-        rule.onNodeWithTag("tool-develop").performClick()
+        rule.onNodeWithTag("tool-params").performClick()
         rule.onNodeWithTag("group-Grain").performScrollTo().performClick()
         rule.onNodeWithTag("field-${Wire.GrainActive}").performScrollTo().performClick()
 
@@ -136,7 +153,7 @@ class EditorFlowTest {
         viewModel.open(uri, "flow-slider.png")
         awaitFrame("the first render")
 
-        rule.onNodeWithTag("tool-develop").performClick()
+        rule.onNodeWithTag("tool-params").performClick()
         rule.onNodeWithTag("group-Enlarger").performScrollTo().performClick()
         val node = rule.onNodeWithTag("field-${Wire.PrintExposure}").performScrollTo().fetchSemanticsNode()
         val range = node.config[SemanticsProperties.ProgressBarRangeInfo]
@@ -346,7 +363,12 @@ class EditorFlowTest {
                     model.state.value.phase != EditorViewModel.Phase.Ready &&
                     model.state.value.phase != EditorViewModel.Phase.Error
                 ) {
-                    Thread.sleep(POLL_MS)
+                    // `waitForIdleSync` blocks *this* thread until the main
+                    // thread is idle, which is what lets the boot coroutine
+                    // resume there. Sleeping instead starves it: the
+                    // continuation is queued on the main dispatcher, so a test
+                    // that waits by sleeping waits forever.
+                    InstrumentationRegistry.getInstrumentation().waitForIdleSync()
                 }
                 assertTrue(
                     "the engine did not start: ${model.state.value.error}",
