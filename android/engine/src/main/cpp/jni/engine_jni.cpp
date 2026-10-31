@@ -29,6 +29,7 @@
 #include "json.hpp"
 #include "output.hpp"
 #include "platform.hpp"
+#include "heif_encode.hpp"
 #include "png16.hpp"
 
 #include <algorithm>
@@ -269,7 +270,8 @@ bool copy_result_to_bitmap(JNIEnv* env, Session* session, jobject bitmap, const 
 }
 
 std::string format_of(const std::string& wire) {
-    if (wire == "tiff16" || wire == "tiff8" || wire == "png16" || wire == "png8" || wire == "jpeg8")
+    if (wire == "tiff16" || wire == "tiff8" || wire == "png16" || wire == "png8" || wire == "jpeg8" ||
+        wire == "heic10")
         return wire;
     return std::string();
 }
@@ -640,7 +642,8 @@ JNIEXPORT jstring JNICALL Java_com_spektralab_engine_EngineNative_exportImage(JN
     const spk::Json spec = parse_or_null(from_java(env, specJson));
     const std::string format = format_of(str_or(spec.at("format"), "tiff16"));
     if (format.empty())
-        return to_java(env, reply_string(error_reply("format must be tiff16, png16, png8 or jpeg8", SPK_ERR_USER)));
+        return to_java(env, reply_string(error_reply(
+                "format must be tiff16, png16, png8, jpeg8 or heic10", SPK_ERR_USER)));
     const std::string space = str_or(spec.at("color_space"), "sRGB");
     const int quality = spec.at("jpeg_quality").as_int(92);
     const uint32_t long_edge = uint32_t(std::max(0, spec.at("long_edge").as_int(0)));
@@ -684,7 +687,16 @@ JNIEXPORT jstring JNICALL Java_com_spektralab_engine_EngineNative_exportImage(JN
         const spkhost::Exif* exif = session->has_exif ? &session->exif : nullptr;
         std::vector<uint8_t> bytes;
         const size_t pixels = size_t(width) * height;
-        if (format == "tiff16" || format == "png16") {
+        if (format == "heic10") {
+            // The same 16-bit pixels the TIFF and PNG paths quantise, handed to
+            // libheif instead of to a PNG encoder. The profile is the one
+            // `icc_for` already resolved for the requested space, which is what
+            // makes the file self-describing rather than merely large.
+            std::vector<uint16_t> rgba16;
+            transform.encode_rgba16(linear, rgba16);
+            ok = spk::android::encode_heif(rgba16.data(), int(width), int(height), 10, icc,
+                                           quality > 0 ? quality : 90, bytes, error);
+        } else if (format == "tiff16" || format == "png16") {
             std::vector<uint16_t> rgba16;
             transform.encode_rgba16(linear, rgba16);
             std::vector<uint16_t> rgb(pixels * 3);

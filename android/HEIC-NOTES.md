@@ -74,33 +74,41 @@ disappear with no change to the calling code, which localises the bug to
 kvazaar's plugin teardown rather than to libheif or to this file. kvazaar is no
 longer built.
 
-### What is still missing: the render→encode bridge
+### The render→encode bridge
 
-`ExportRunner` asks the *engine* to write a file (`session.export(path, spec)`),
-and the engine has no HEIF writer — by design, `ARCHITECTURE.md` §8.8 puts file
-writing in the host. So a HEIC export needs the render's 16-bit pixels in
-memory, handed to `LibheifWriter.encodeRgba16`, not a path handed to the engine.
+It exists now, and it is one branch rather than a pipeline: `exportImage` in
+`jni/engine_jni.cpp` already holds the 16-bit pixels (`transform.encode_rgba16`)
+and the resolved ICC profile (`spkhost::icc_for`) before it hands them to a PNG
+or TIFF encoder, so `heic10` is a third caller of the same data:
 
-That bridge does not exist, so **the picker does not offer HEIC**:
-`ExportFormats.offered()` returns only the four formats the engine's writer
-produces, and `ExportFormats.pendingReason()` is what the panel prints beside
-the two it cannot. This is deliberate — the HEIC enum values existed before
-anything could write one, and the panel rendered `ExportFormat.entries`, so the
-app briefly offered two chips that would have failed at the end of a full
-render. `ExportFormatsTest` pins both directions.
+```cpp
+} if (format == "heic10") {
+    std::vector<uint16_t> rgba16;
+    transform.encode_rgba16(linear, rgba16);
+    ok = spk::android::encode_heif(rgba16.data(), width, height, 10, icc, quality, bytes, error);
+} else if (format == "tiff16" || format == "png16") {
+```
 
-## The order of work when this resumes
+`heif_encode.cpp` is compiled in **both** configurations: with the flag it is
+the real encoder, without it a stub that refuses with "this build has no HEIC
+encoder". That is deliberate — compiling the file only under the flag was a
+link error rather than a graceful absence, because `exportImage` is not guarded.
 
-1. **Render to memory.** The engine already has a 16-bit PNG writer in
-   `jni/png16.cpp`; what is needed is the pixels without a file, either a
-   `render_to_buffer` entry point or reading back the PNG the engine can
-   already produce and decoding it as 16-bit in Kotlin (`BitmapFactory` will
-   not do — it decodes 16-bit PNG to 8-bit `ARGB_8888`).
-2. Then `ExportFormats.offered` gains `Heic10`, and `LibheifWriter` is already
-   the writer it needs.
-3. Gain maps (ISO 21496-1) are still untouched: libheif writes them, but this
-   product has no HDR headroom to declare until the export path can carry more
-   than one rendition.
+The picker follows the writer: `ExportFormats.offered(hasHeifWriter)` returns
+four formats or five, and a build without libheif appends the reason beneath
+the chips instead of a chip that can only fail.
+
+**Still not verified end to end.** The encoder is (7 instrumented cases), and
+the export branch compiles and is reachable, but no test has driven a real
+render through `heic10` on this machine: that needs a session, a photograph and
+a full-tier render, which on the emulator's software Vulkan exceeds the
+existing export tests' timeouts. That gap is the first thing to close on
+hardware — and it is a gap in *verification*, not a known defect.
+
+Gain maps (ISO 21496-1) are still untouched: libheif writes them, but this
+product has no HDR headroom to declare until the export path can carry more
+than one rendition.
+
 
 
 ## Two build obstacles, both solved

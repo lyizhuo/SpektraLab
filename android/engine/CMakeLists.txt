@@ -60,14 +60,20 @@ add_library(spektralab_android SHARED
     "${SPEKTRALAB_ANDROID_JNI}/engine_jni.cpp"
     "${SPEKTRALAB_ANDROID_JNI}/decode_bridge.cpp"
     "${SPEKTRALAB_ANDROID_JNI}/png16.cpp"
+    # Always compiled: the file defines `encode_heif` twice, once as the real
+    # encoder and once as a stub that refuses with a reason, so `exportImage`
+    # needs no `#if` of its own and a build without libheif answers through the
+    # same channel as every other export failure. Compiling it only under the
+    # flag was a link error, not a graceful absence.
+    "${SPEKTRALAB_ANDROID_JNI}/heif_encode.cpp"
     ${SPEKTRALAB_HOST_IO_SOURCES})
 
 # HEIC, off by default.
 #
-# libheif + kvazaar are ~12 MB of static library per ABI and are built out of
-# band (`android/scripts/build-heif.ps1`) rather than by Gradle, so the ordinary
+# libheif + x265 are ~10 MB of static library per ABI and are built out of band
+# (`android/scripts/build-heif.ps1`) rather than by Gradle, so the ordinary
 # build must not depend on them existing. `-Pspektralab.heif=true` turns this on
-# and passes SPEKTRALAB_HEIF_ROOT; without both, the symbol is simply absent and
+# and passes SPEKTRALAB_HEIF_ROOT; without both, `encode_heif` is the stub and
 # `HeifNative.available` is false, which the export page already treats as "this
 # format is not offered".
 if(SPEKTRALAB_WITH_HEIF)

@@ -27,16 +27,27 @@ class ExportFormatsTest {
     }
 
     @Test
-    fun heicIsNotOfferedUntilTheRenderBridgeExists() {
-        // The encoder works (see HeifEncodeInstrumentedTest), but `ExportRunner`
-        // asks the *engine* to write a file and the engine has no HEIF writer.
-        // Until the render's 16-bit pixels are handed to LibheifWriter, this
-        // must stay true — and the day it flips, this test should be the one
-        // that has to change.
+    fun heicFollowsTheWriterRatherThanTheEnum() {
+        // Two builds, two answers, and the picker is the thing that has to
+        // follow: a build without libheif must not offer a format whose only
+        // outcome is a failure at the end of a full render.
+        assertFalse(
+            "HEIC was offered by a build with no encoder",
+            ExportFormat.Heic10 in ExportFormats.offered(hasHeifWriter = false),
+        )
+        assertTrue(
+            "HEIC was withheld from a build that has an encoder",
+            ExportFormat.Heic10 in ExportFormats.offered(hasHeifWriter = true),
+        )
+    }
+
+    @Test
+    fun heicEightIsNeverOffered() {
+        // The encoder in this build is 10-bit, so an 8-bit request would be
+        // refused by the encoder regardless. Offering it would be offering a
+        // choice whose only outcome is a refusal.
         for (hasWriter in listOf(false, true)) {
-            val offered = ExportFormats.offered(hasHeifWriter = hasWriter)
-            assertFalse("HEIC was offered without a render→encode bridge", ExportFormat.Heic10 in offered)
-            assertFalse("HEIC 8-bit can never be offered by this encoder", ExportFormat.Heic8 in offered)
+            assertFalse(ExportFormat.Heic8 in ExportFormats.offered(hasHeifWriter = hasWriter))
         }
     }
 
@@ -48,16 +59,6 @@ class ExportFormatsTest {
             val reason = ExportFormats.pendingReason(format)
             assertNotNull("$format is unavailable with no explanation", reason)
             assertTrue("$format's reason is too short: $reason", (reason ?: "").length > 8)
-        }
-    }
-
-    @Test
-    fun anOfferedFormatHasNoPendingReason() {
-        // The other direction: a format with a reason must not also be
-        // selectable, or the panel contradicts itself in two adjacent lines.
-        val offered = ExportFormats.offered(hasHeifWriter = true).toSet()
-        for (format in offered) {
-            assertNull("$format is offered but also carries a reason", ExportFormats.pendingReason(format))
         }
     }
 

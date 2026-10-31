@@ -33,21 +33,28 @@ enum class ExportFormat(val wire: String, val mime: String, val extension: Strin
  * Which formats the export pipeline can actually produce.
  *
  * The distinction this exists to make is between *the enum has a value* and
- * *the pipeline can write it*. `ExportRunner` asks the engine to render into a
- * file, and the engine writes TIFF, PNG and JPEG; it has no HEIF writer, by
- * design (`ARCHITECTURE.md` §8.8 — the engine returns pixels, the host writes
- * files). HEIC is written by [com.spektralab.app.export.heic.LibheifWriter]
- * instead, which means it needs the render's 16-bit pixels handed over rather
- * than a path handed to the engine, and **that bridge does not exist yet**.
+ * *the pipeline can write it*.
  *
- * So until it does, HEIC must not appear in the picker: an offered format that
- * fails at the end of a long render is worse than an absent one, and a chip
- * that sends `heic10` to an engine that has never heard of it is a guaranteed
- * failure dressed as a choice.
+ * `ExportRunner` asks the engine's export entry point to write a file, and that
+ * entry point writes TIFF, PNG, JPEG and — since HEIC was wired — HEIF through
+ * libheif. It is one more `format` branch in `exportImage`, not a second
+ * pipeline, because the 16-bit pixels and the resolved ICC profile are already
+ * in hand there; a Kotlin-side encoder would have had to re-render or decode
+ * its own output to obtain them.
  *
- * [heicPending] is what the picker shows instead — greyed, with this as the
- * reason — because the same rule applies here as on the parameter panel: a
- * control that is not available has to be able to say why.
+ * **A build compiled without `-Pspektralab.heif=true` has no HEIF writer**, and
+ * then `heic10` must not be offered: a format that fails at the end of a long
+ * render is worse than an absent one. That is why this object exists rather
+ * than the panel iterating `ExportFormat.entries`, which it used to do — and
+ * which briefly offered two chips that could only fail.
+ *
+ * `heic8` is never offered: this build's encoder is 10-bit, so an 8-bit request
+ * would be refused by the encoder anyway, and a choice whose only outcome is a
+ * refusal is not a choice.
+ *
+ * Formats that are unavailable say so beneath the chips rather than vanishing,
+ * because the same rule applies here as on the parameter panel: a control that
+ * is not available has to be able to say why.
  */
 object ExportFormats {
 
@@ -62,22 +69,17 @@ object ExportFormats {
     /**
      * Formats this build can write, given whether a HEIF writer is linked.
      *
-     * When the render→encoder bridge lands, this is the one line that changes:
-     * `if (hasHeifWriter) engineWritten + ExportFormat.Heic10`.
+     * One line, and it is the line the picker has to follow: a build without
+     * libheif offers four formats and says why it has no HEIC, and a build with
+     * it offers five.
      */
-    fun offered(hasHeifWriter: Boolean): List<ExportFormat> {
-        // TODO(heic): return engineWritten + Heic10 when the bridge exists.
-        // The flag is deliberately unused rather than removed: the signature is
-        // what the caller already threads through, and the day it becomes true
-        // this function must change, which is the point of keeping it.
-        check(hasHeifWriter || true)
-        return engineWritten
-    }
+    fun offered(hasHeifWriter: Boolean): List<ExportFormat> =
+        if (hasHeifWriter) engineWritten + ExportFormat.Heic10 else engineWritten
 
     /** The reason to show beside a format this build cannot produce. */
     fun pendingReason(format: ExportFormat): String? = when (format) {
         ExportFormat.Heic10 ->
-            "编码器已可用，但渲染结果还没有接到它上面：导出通路仍由引擎直接写 TIFF/PNG/JPEG。"
+            "这个安装包不带 HEIC 编码器（libheif 未编入）。用 -Pspektralab.heif=true 构建。"
         ExportFormat.Heic8 ->
             "HEIC 编码器是 10-bit 的，8-bit 版本它产不出来。"
         else -> null
