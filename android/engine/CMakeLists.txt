@@ -62,6 +62,33 @@ add_library(spektralab_android SHARED
     "${SPEKTRALAB_ANDROID_JNI}/png16.cpp"
     ${SPEKTRALAB_HOST_IO_SOURCES})
 
+# HEIC, off by default.
+#
+# libheif + kvazaar are ~12 MB of static library per ABI and are built out of
+# band (`android/scripts/build-heif.ps1`) rather than by Gradle, so the ordinary
+# build must not depend on them existing. `-Pspektralab.heif=true` turns this on
+# and passes SPEKTRALAB_HEIF_ROOT; without both, the symbol is simply absent and
+# `HeifNative.available` is false, which the export page already treats as "this
+# format is not offered".
+if(SPEKTRALAB_WITH_HEIF)
+    set(heif_dir "${SPEKTRALAB_HEIF_ROOT}/${ANDROID_ABI}")
+    if(NOT EXISTS "${heif_dir}/lib/libheif.a")
+        message(FATAL_ERROR
+            "SPEKTRALAB_WITH_HEIF is on but ${heif_dir}/lib/libheif.a is missing; "
+            "run android/scripts/build-heif.ps1 first, or build without -Pspektralab.heif=true.")
+    endif()
+
+    target_sources(spektralab_android PRIVATE "${SPEKTRALAB_ANDROID_JNI}/heif_encode.cpp")
+    target_include_directories(spektralab_android PRIVATE "${heif_dir}/include")
+    # kvazaar after libheif: libheif calls into it, and these are static
+    # archives, so link order is the algorithm.
+    target_link_libraries(spektralab_android PRIVATE
+        "${heif_dir}/lib/libheif.a"
+        "${heif_dir}/lib/libkvazaar.a")
+    target_compile_definitions(spektralab_android PRIVATE SPEKTRALAB_WITH_HEIF=1)
+    message(STATUS "HEIC encoder: libheif + kvazaar from ${heif_dir}")
+endif()
+
 target_compile_features(spektralab_android PRIVATE cxx_std_20)
 # `nativeBuildInfo()` reports this: the plan's S1 acceptance turns on the
 # library being optimised, and CMake is the only place that actually knows.

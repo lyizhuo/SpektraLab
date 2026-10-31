@@ -20,6 +20,15 @@ val depsDir: File =
 val vulkanHeaders = File(depsDir, "Vulkan-Headers/include")
 val librawSource = File(depsDir, "LibRaw-0.22.2")
 val shaderSourceDir = File(repoRoot, "engine/src/shaders/vulkan")
+
+// The HEIC encoder (libheif + kvazaar), built out of band by
+// android/scripts/build-heif.ps1. Off unless asked for twice: the property has
+// to be set *and* the output has to be there, because a half-built dependency
+// must not turn a green build red for everyone else.
+val heifRoot = File(depsDir, "heif")
+val withHeif: Boolean =
+    (findProperty("spektralab.heif") as String?)?.toBoolean() == true &&
+        File(heifRoot, "arm64-v8a/lib/libheif.a").isFile
 val resourcesDir = File(repoRoot, "engine/resources")
 val licenseDir = File(repoRoot, "license")
 
@@ -176,6 +185,8 @@ android {
                     "-DSPEKTRALAB_LIBRAW_SOURCE=${librawSource.absolutePath}",
                     "-DSPEKTRALAB_GLSLANG=${shaderTool.absolutePath}",
                     "-DANDROID_STL=c++_static",
+                    "-DSPEKTRALAB_WITH_HEIF=$withHeif",
+                    "-DSPEKTRALAB_HEIF_ROOT=${heifRoot.absolutePath}",
                 )
             }
         }
