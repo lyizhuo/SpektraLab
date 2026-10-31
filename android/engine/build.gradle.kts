@@ -135,11 +135,26 @@ val syncEngineAssets = tasks.register<Sync>("syncEngineAssets") {
 
 // AGP's SourceSet API refuses Provider instances ("Android Studio cannot tell
 // if a provider is generated or static"), so the directory is added as a
-// FileCollection that *names its producer*: that is what makes every consumer
-// of the source set (the asset merger and the lint model among them) wait for
-// `syncEngineAssets` instead of discovering the ordering by accident.
+// FileCollection that *names its producer*.
+//
+// That is not enough on its own, and this cost an APK with **zero assets**.
+// `files(dir).builtBy(task)` tells Gradle about the producer, but AGP 9.1's
+// asset merger reads the source set at configuration time, when the directory
+// does not exist yet, and quietly merges nothing: `assembleDebug` succeeds, the
+// APK has no `assets/engine/`, and every engine-dependent instrumented test
+// fails with "engine assets could not be extracted: engine" — a message that
+// names an asset directory rather than the task that never ran.
+//
+// So the dependency is also stated where it is actually needed: every task that
+// merges or packages assets waits for the staging task. (The alternative,
+// `variant.sources.assets.addGeneratedSourceDirectory`, needs a task with a
+// single `@OutputDirectory DirectoryProperty`, which `Sync` does not have.)
 val engineAssetsDir = File(layout.buildDirectory.get().asFile, "generated/engineAssets")
 val engineAssets = files(engineAssetsDir).builtBy(syncEngineAssets)
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    dependsOn(syncEngineAssets)
+}
 
 android {
     namespace = "com.spektralab.engine"
