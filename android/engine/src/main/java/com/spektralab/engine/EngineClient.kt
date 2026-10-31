@@ -278,14 +278,36 @@ class EngineSession internal constructor(
         requireOpen()
         val reply = client.setParams(handle, delta)
         if (!reply.ok) throw EngineException(reply.status, reply.error)
-        params = client.getParams(handle).optJSONObject("params") ?: params
+        params = paramsOf(client.getParams(handle))
         params
     }
 
     suspend fun refreshParams(): JSONObject = withContext(client.dispatcher) {
         requireOpen()
-        params = client.getParams(handle).optJSONObject("params") ?: params
+        params = paramsOf(client.getParams(handle))
         params
+    }
+
+    /**
+     * The parameter map out of a `get_params` reply.
+     *
+     * `spk_get_params` returns the map **itself** (`read_params` in
+     * `core/params.cpp` is a flat `name -> value` object) and the JNI adds `ok`
+     * beside it, so there is no `"params"` key to ask for. Reading
+     * `optJSONObject("params")` therefore always found nothing and fell back to
+     * the previous value, which meant **every edit was discarded on the client
+     * side**: the engine applied the change, the app kept showing the old
+     * number, and a switch snapped back to where it was.
+     *
+     * `open`'s reply is a different shape — it nests the map under `"params"` —
+     * so both are accepted rather than one being assumed. The fallback is a
+     * copy with `ok` removed rather than the reply itself, because the caller
+     * keeps this object and a stray `ok` in it would look like a parameter to
+     * anything that iterates the keys.
+     */
+    private fun paramsOf(reply: JSONObject): JSONObject {
+        reply.optJSONObject("params")?.let { return it }
+        return JSONObject(reply.toString()).apply { remove("ok") }
     }
 
     /**
