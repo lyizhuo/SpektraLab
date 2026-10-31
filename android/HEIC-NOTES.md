@@ -30,12 +30,17 @@ ProPhoto.
 - `export/ExportContract.kt` — `Heic8`, `Heic10`, `needsIccProfile`.
 - `export/heic/HeicColorPolicy.kt` — the rule, plus the `HeicWriter` /
   `Result` interfaces. 9 unit tests.
-- `engine/src/main/cpp/jni/heif_encode.cpp` + `HeifNative.kt` — a working
-  libheif encode path, built only when `-Pspektralab.heif=true`.
+- `engine/src/main/cpp/jni/heif_encode.cpp` + `.hpp` + `HeifNative.kt` — the
+  encoder, callable from both the JNI surface and `exportImage`. Compiled in
+  both configurations: real with the flag, a refusing stub without it.
+- `jni/engine_jni.cpp` — the `heic10` branch in `exportImage`, and the gamut
+  counts the export page prints.
 - `engine/CMakeLists.txt` — `SPEKTRALAB_WITH_HEIF`, default OFF, with a
   `FATAL_ERROR` that names the script when it is on but the library is absent.
-- The export path still offers only the four formats it can actually write. No
-  HEIC button appears; nothing pretends.
+- `export/heic/LibheifWriter.kt` — the Kotlin-side writer and its refusals,
+  used by the policy tests; the export path itself goes through the JNI.
+- `ExportFormats.offered(hasHeifWriter)` — four formats or five, and the reason
+  printed beneath the chips for the ones this build cannot write.
 
 ## Where it stands, measured 2026-11-01
 
@@ -58,6 +63,22 @@ What is verified on `Pixel_9_Pro(AVD) - 16`:
 
 `HeifEncodeInstrumentedTest` is un-`@Ignore`d. It carries the repetition case
 because the failure it was written for only appeared on the second encode.
+
+**And it is verified end to end**, which the encoder test cannot do:
+`HeicExportInstrumentedTest` takes the test fixture through `EngineClient` →
+render → `exportImage` → a file, and checks the file. Three cases, green on the
+same device:
+
+- a 10-bit HEIC carrying the **ProPhoto** profile. That profile is synthesised
+  at runtime (`output.cpp:406`), so its presence proves the whole chain — the
+  requested space, the transform that resolved it, and the `prof` box. The test
+  parses the box and checks the ICC's declared length fills its payload, which a
+  truncated profile would fail.
+- the same frame as sRGB yields a **different** profile payload, so the space is
+  applied rather than assumed.
+- the gamut report is monotone: ProPhoto cannot report more out-of-gamut pixels
+  than sRGB, whose gamut it contains. A constant report — or one computed from
+  the wrong buffer — fails that.
 
 ### The abort was kvazaar, and switching encoders fixed it
 
@@ -98,16 +119,64 @@ The picker follows the writer: `ExportFormats.offered(hasHeifWriter)` returns
 four formats or five, and a build without libheif appends the reason beneath
 the chips instead of a chip that can only fail.
 
-**Still not verified end to end.** The encoder is (7 instrumented cases), and
-the export branch compiles and is reachable, but no test has driven a real
-render through `heic10` on this machine: that needs a session, a photograph and
-a full-tier render, which on the emulator's software Vulkan exceeds the
-existing export tests' timeouts. That gap is the first thing to close on
-hardware — and it is a gap in *verification*, not a known defect.
+`HeicExportInstrumentedTest` closes what used to be the last gap here: a real
+render through `heic10` to a file, verified structurally. It runs `preview` tier
+with a long edge of 256 and a half-size open — not timidity, but the only way
+this fits an emulator budget; the export path is the same code at every tier,
+and a full-tier run on hardware is still worth doing once.
 
-Gain maps (ISO 21496-1) are still untouched: libheif writes them, but this
-product has no HDR headroom to declare until the export path can carry more
-than one rendition.
+## Gain maps: why they are not in this build
+
+Two independent blockers, both checked rather than assumed.
+
+**1. The library cannot write one.** An HDR gain map is an *auxiliary image*
+with a `tmap` item plus the `urn:com:apple:photo:2020:aux:hdrgainmap` assertion,
+and everything it needs sits behind `heif_aux_images.h`. In libheif 1.23.7 that
+header has read APIs only:
+
+```
+heif_image_handle_get_number_of_auxiliary_images
+heif_image_handle_get_list_of_auxiliary_image_IDs
+heif_image_handle_get_auxiliary_type
+heif_image_handle_get_auxiliary_image_handle
+```
+
+There is no `heif_context_encode_auxiliary_image` and no
+`heif_image_handle_set_auxiliary_type` — a file can be *read* with an aux image
+and never *written* with one. A grep of every public header for `21496`,
+`gain_map`, `gainmap` or `tmap` returns nothing.
+
+**2. There is no second rendition to describe — yet there is the data for one.**
+
+This is the interesting half, and it is worth recording because it inverts the
+obvious conclusion. A gain map exists to carry a *second*, wider rendition
+alongside an SDR one. The obvious reading is "a film simulation has no HDR
+version, so there is nothing to put in it".
+
+But the engine already produces that data and throws it away. `GamutReport`'s
+`clipped` count is precisely the light above 1.0 in the destination space —
+`transform.to_linear` hands the export path values that exceed 1, and the
+encoder quantises them to the container's ceiling. **The clipped pixels are the
+gain map's content**: they are what a wider rendition would have shown.
+
+So the product case is real: on a ProPhoto export the clipped fraction is the
+part of the photograph an HDR display could recover. It is not implemented
+because the muxer cannot express it, not because the picture lacks it.
+
+**What would unblock it**, in order of cost:
+
+1. A libheif that exposes aux-image writing (check `heif_aux_images.h` in the
+   version being built — if an `encode_auxiliary` appears, this becomes a day's
+   work).
+2. Otherwise, a second muxer: the `tmap` item and its metadata are a small,
+   well-specified addition to the ISO-BMFF tree libheif already produces, but
+   writing it means either patching libheif or appending boxes to its output —
+   and patching a C++ library's container writer is not a change to make in an
+   evening.
+3. Either way it needs a product decision first: the gain map must be computed
+   against a headroom target (how many stops above the SDR rendition), and that
+   is a grading decision, not a code one.
+
 
 
 
