@@ -14,6 +14,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import com.spektralab.app.rolls.Roll
+import com.spektralab.app.rolls.RollStore
 import com.spektralab.app.ui.CameraScreen
 import java.io.File
 
@@ -34,10 +36,36 @@ import java.io.File
  */
 class CameraActivity : ComponentActivity() {
 
+    /**
+     * The roll this camera is filling.
+     *
+     * C3 prints `PORTRA 400` and `17 / 36`, so the screen needs a roll before a
+     * frame exists — the app opens a new one when there is none, or continues
+     * the newest one that is not full. That is the whole point of the model:
+     * a counter that restarts at 1 every time the camera is opened is not a
+     * film roll, it is a decoration.
+     *
+     * The stock is a default for now. C1 (the roll library) is what loads a
+     * roll with a chosen film and paper; until it exists, the camera inherits
+     * whatever roll is current and invents one with the catalogue's default
+     * pair when there is none. `RollStore.appendToCurrent` starts a new roll
+     * when the current one has a different film, so the two cannot drift.
+     */
+    private val rolls by lazy { RollStore(this) }
+
+    private var roll: Roll? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val captureDir = File(cacheDir, "captures").apply { mkdirs() }
+        roll = rolls.current() ?: Roll.newRoll(
+            id = "roll-${System.currentTimeMillis()}",
+            filmStockId = DEFAULT_FILM,
+            paperStockId = DEFAULT_PAPER,
+        ).also { rolls.save(it) }
+
+        val current = roll!!
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
@@ -49,6 +77,9 @@ class CameraActivity : ComponentActivity() {
                         captureDirectory = captureDir,
                         onCaptured = { file, readout -> finishWith(file, readout) },
                         onClose = { finish() },
+                        filmLabel = current.filmStockId.uppercase().replace('_', ' '),
+                        frameIndex = current.count,
+                        frameCapacity = current.capacity,
                     )
                 }
             }
@@ -57,6 +88,23 @@ class CameraActivity : ComponentActivity() {
 
     private fun finishWith(file: File, readout: String) {
         val uri: Uri = FileProvider.getUriForFile(this, "$packageName.captures", file)
+
+        // The frame joins the roll before the editor is asked to open it: a
+        // capture that reached the disk but not the roll would come back as an
+        // untitled photograph the next time the camera opens, and the counter
+        // would silently forget it.
+        roll?.let { r ->
+            runCatching {
+                rolls.appendToCurrent(
+                    frameId = uri.toString(),
+                    filmStockId = r.filmStockId,
+                    paperStockId = r.paperStockId,
+                    capacity = r.capacity,
+                    idFor = { "roll-$it" },
+                )
+            }
+        }
+
         setResult(
             RESULT_OK,
             Intent().apply {
@@ -76,5 +124,9 @@ class CameraActivity : ComponentActivity() {
 
         /** Result code the editor checks before opening [Intent.getData]. */
         const val RESULT_CAPTURED = RESULT_OK
+
+        /** The catalogue's default pair until C1 can load a roll explicitly. */
+        private const val DEFAULT_FILM = "kodak_portra_400"
+        private const val DEFAULT_PAPER = "kodak_portra_endura"
     }
 }
