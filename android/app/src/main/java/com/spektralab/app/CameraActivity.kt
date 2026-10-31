@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.spektralab.app.rolls.Roll
 import com.spektralab.app.rolls.RollStore
+import com.spektralab.app.rolls.stockLabel
 import com.spektralab.app.ui.CameraScreen
 import java.io.File
 
@@ -77,7 +78,7 @@ class CameraActivity : ComponentActivity() {
                         captureDirectory = captureDir,
                         onCaptured = { file, readout -> finishWith(file, readout) },
                         onClose = { finish() },
-                        filmLabel = current.filmStockId.uppercase().replace('_', ' '),
+                        filmLabel = stockLabel(current.filmStockId),
                         frameIndex = current.count,
                         frameCapacity = current.capacity,
                     )

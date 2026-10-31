@@ -93,3 +93,25 @@ data class Roll(
         )
     }
 }
+
+/**
+ * What a stock id is called on screen.
+ *
+ * `kodak_portra_400` is the *id* — a stable key the catalogue and the engine
+ * agree on. The C3 frame prints `PORTRA 400`, and the difference is not
+ * cosmetic: the manufacturer is already implied by the product, and repeating
+ * it costs a third of a badge that has 16 characters to work with.
+ *
+ * The rule is "drop a leading manufacturer token when there is still a film
+ * name after it", which is a display convention and lives in exactly one place
+ * so that two surfaces cannot disagree about it. When the app grows a real
+ * catalogue with display names, this function is what the catalogue replaces.
+ */
+fun stockLabel(stockId: String): String {
+    val tokens = stockId.split('_').filter { it.isNotBlank() }
+    if (tokens.isEmpty()) return stockId
+    // Two tokens or fewer is already a name (`tri_x`); three or more is
+    // manufacturer + name + speed, which is the case this exists for.
+    val shown = if (tokens.size >= 3) tokens.drop(1) else tokens
+    return shown.joinToString(" ") { it.uppercase() }
+}
