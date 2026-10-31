@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SpektraLab</string>
+
+    <!-- C3. The camera is optional at the manifest level: a tablet with no rear
+         camera still runs the editor and the importer. See uses-feature. -->
+    <string name="camera_permission_rationale">拍摄需要相机权限。没有它仍然可以从相册导入照片。</string>
 </resources>

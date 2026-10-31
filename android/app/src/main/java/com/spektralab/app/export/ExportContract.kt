@@ -3,12 +3,30 @@ package com.spektralab.app.export
 import android.net.Uri
 import org.json.JSONObject
 
-/** The four formats the export page offers (plan S5/S6). */
+/**
+ * The formats the export page offers (plan S5/S6, plus HEIC).
+ *
+ * `Heic10` is the one that is not a raster: a 10-bit HEVC image inside a HEIF
+ * container, with the colour profile written as an ICC `colr` box rather than
+ * an `nclx` enum. That distinction is the whole point for this product — `nclx`
+ * can name sRGB, Display P3 and BT.2020 and nothing else, so a ProPhoto export
+ * or a profile measured from the paper cannot be described by it, and the file
+ * would be interpreted as sRGB by every viewer.
+ *
+ * `bits` is the *container* depth on the wire, not the source: the engine
+ * always hands back float or 16-bit data and the writer quantises.
+ */
 enum class ExportFormat(val wire: String, val mime: String, val extension: String, val bits: Int) {
     Tiff16("tiff16", "image/tiff", "tif", 16),
     Png16("png16", "image/png", "png", 16),
     Png8("png8", "image/png", "png", 8),
     Jpeg8("jpeg8", "image/jpeg", "jpg", 8),
+    Heic10("heic10", "image/heic", "heic", 10),
+    Heic8("heic8", "image/heic", "heic", 8),
+    ;
+
+    /** True when this format must carry an ICC profile of its own. */
+    val needsIccProfile: Boolean get() = this == Heic10 || this == Heic8
 }
 
 /** The colour spaces the host's writers have profiles for. */

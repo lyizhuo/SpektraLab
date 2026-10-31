@@ -19,6 +19,24 @@ foreach(required SPEKTRALAB_REPO SPEKTRALAB_VULKAN_HEADERS SPEKTRALAB_LIBRAW_SOU
     endif()
 endforeach()
 
+# Normalise the incoming paths before anything interpolates them.
+#
+# Gradle hands these over as native paths, so on Windows they arrive as
+# `D:\200_Coding\SpektraLab`, and a quoted CMake string treats every backslash
+# as an escape sequence: `\2` is not one, and configure dies with
+#
+#   Syntax error in cmake code when parsing string
+#     D:\200_Coding\SpektraLab/engine/host/image_io.cpp
+#   Invalid character escape '\2'.
+#
+# It only bites on Windows, and only when a directory component starts with a
+# digit — which is why the POSIX path this project was written on never saw it.
+# Converting once here fixes every use in this file, in host_io.cmake and in
+# the engine's own CMakeLists, and leaves POSIX paths unchanged.
+foreach(normalise SPEKTRALAB_REPO SPEKTRALAB_VULKAN_HEADERS SPEKTRALAB_LIBRAW_SOURCE SPEKTRALAB_GLSLANG)
+    file(TO_CMAKE_PATH "${${normalise}}" ${normalise})
+endforeach()
+
 # The engine's own ctest targets are not wanted inside an APK; android/native
 # builds exactly the same sources with BUILD_TESTING=ON for the device runs.
 set(BUILD_TESTING OFF CACHE BOOL "android library" FORCE)

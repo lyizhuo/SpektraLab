@@ -10,6 +10,17 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <!-- C3: `RAW_SENSOR` needs no permission of its own beyond CAMERA. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- The camera is optional, not required: the editor and the importer are
+         the product, and a tablet with no rear camera must still install.
+         `any` rather than `back` because a device may expose only the front
+         one; the C3 lens bar reports what it finds and says so when it is
+         empty. RAW is a capability, not a hardware feature, so it cannot be
+         declared here — CameraInventory probes it at run time. -->
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+
     <application
         android:name=".SpektraLabApp"
         android:allowBackup="true"
@@ -28,6 +39,27 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- C3. Locked to portrait while shooting: the capture session's
+             surfaces are tied to the display rotation at configure time, and a
+             rotate mid-capture drops the frame. The editor rotates freely. -->
+        <activity
+            android:name=".CameraActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.SpektraLab" />
+
+        <!-- One DNG per capture, handed to the editor by content URI. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.captures"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <!-- WorkManager runs a long export through its own foreground service;
              the type has to be declared here, and `dataSync` is the one an

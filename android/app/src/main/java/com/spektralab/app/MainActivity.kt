@@ -7,12 +7,22 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.lifecycleScope
 import com.spektralab.app.ui.EditorScreen
@@ -20,6 +30,9 @@ import com.spektralab.app.ui.StripEntry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** The prototype's warm accent, shared with C3's shutter. */
+private val CameraAccent = Color(0xFFE8A33D)
 
 class MainActivity : ComponentActivity() {
 
@@ -66,25 +79,58 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * C3's result: one DNG, already developed enough to be openable.
+     *
+     * The capture is a real RAW file, so the engine's own LibRaw path reads it
+     * exactly as it reads an imported `.dng` — the film model gets sensor data
+     * rather than a JPEG's tone curve. That is the whole reason the camera
+     * exists in this product (`AGENTS.md` trap 12).
+     */
+    private val launchCamera = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode != CameraActivity.RESULT_CAPTURED) return@registerForActivityResult
+        val uri = result.data?.data ?: return@registerForActivityResult
+        val name = uri.lastPathSegment?.substringAfterLast('/') ?: "capture.dng"
+        if (strip.none { it.uri == uri }) strip.add(StripEntry(uri, name))
+        viewModel.open(uri, name)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewModel.boot()
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    EditorScreen(
-                        viewModel = viewModel,
-                        strip = strip,
-                        onAddPhotos = { pickImages.launch(IMAGE_TYPES) },
-                        onAddFolder = {
-                            exportDirectoryCallback = null
-                            pickFolder.launch(null)
-                        },
-                        onPickExportDirectory = { onPicked ->
-                            exportDirectoryCallback = onPicked
-                            pickFolder.launch(null)
-                        },
-                    )
+                    Box(Modifier.fillMaxSize()) {
+                        EditorScreen(
+                            viewModel = viewModel,
+                            strip = strip,
+                            onAddPhotos = { pickImages.launch(IMAGE_TYPES) },
+                            onAddFolder = {
+                                exportDirectoryCallback = null
+                                pickFolder.launch(null)
+                            },
+                            onPickExportDirectory = { onPicked ->
+                                exportDirectoryCallback = onPicked
+                                pickFolder.launch(null)
+                            },
+                        )
+
+                        // C3's door. It floats over the editor for now because
+                        // the prototype's home (C1) does not exist yet; when it
+                        // does, this moves onto that screen's 相机 button and
+                        // stops overlapping the canvas.
+                        ExtendedFloatingActionButton(
+                            onClick = { launchCamera.launch(CameraActivity.intent(this@MainActivity)) },
+                            containerColor = CameraAccent,
+                            contentColor = androidx.compose.ui.graphics.Color.Black,
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(20.dp),
+                            text = { Text("相机") },
+                            icon = { Icon(Icons.Filled.PhotoCamera, contentDescription = null) },
+                        )
+                    }
                 }
             }
         }

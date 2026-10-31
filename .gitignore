@@ -357,3 +357,12 @@ desktop/src-tauri/host-staging/
 desktop/test-results/
 desktop/playwright-report/
 desktop/src-tauri/tauri.bundle.json
+
+# Local film simulation scratch folder
+You_Still_Fucked_Film_Simulation/
+
+# Figma MCP helper: the PAT and the vendored bridge never belong in git
+tools/figma-mcp/headers.txt
+tools/figma-mcp/vendor/
+.tmp/
+

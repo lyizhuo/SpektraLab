@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The only thing shared through FileProvider is C3's DNG.
+  `cacheDir/captures` is deliberate: a capture that is never opened is a 24 MB
+  file the user did not ask for, and the cache is what the system may reclaim.
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="captures" path="captures/" />
+</paths>
