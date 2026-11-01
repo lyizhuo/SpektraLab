@@ -12,6 +12,13 @@
 
     <!-- C3: `RAW_SENSOR` needs no permission of its own beyond CAMERA. -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- C1's 最近照片 is the device's own gallery: the photographic app that
+         cannot see the photographs on the phone is not a home screen. API 33
+         splits this out of READ_EXTERNAL_STORAGE, which stays for 29-32. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
 
     <!-- The camera is optional, not required: the editor and the importer are
          the product, and a tablet with no rear camera must still install.

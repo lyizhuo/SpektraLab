@@ -17,7 +17,7 @@ import androidx.core.content.FileProvider
 import com.spektralab.app.rolls.Roll
 import com.spektralab.app.rolls.RollStore
 import com.spektralab.app.rolls.stockLabel
-import com.spektralab.app.ui.CameraScreen
+import com.spektralab.app.ui.screens.camera.CameraScreen
 import java.io.File
 
 /**

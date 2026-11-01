@@ -1,4 +1,4 @@
-package com.spektralab.app.ui.home
+package com.spektralab.app.ui.screens.home
 
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
@@ -7,9 +7,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.verticalScroll
+import com.spektralab.app.ui.frame.ScreenBand
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,6 +31,7 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,10 +52,19 @@ import com.spektralab.app.rolls.stockLabel
 import com.spektralab.app.ui.theme.Tokens
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
+import android.content.Context
+import android.net.Uri
+import androidx.compose.ui.platform.LocalContext
 
-/** One photograph the app can open again, with the extension its badge shows. */
-data class RecentFrame(val file: File, val badge: String)
+/**
+ * One photograph from the device's gallery.
+ *
+ * It used to be a [File] pointing into the app's own capture directory, so on a
+ * phone full of photographs the grid was empty — which is exactly what the
+ * first real-device run showed. It is a `content://` URI now, because that is
+ * what the gallery hands out and what the editor opens.
+ */
+data class RecentFrame(val uri: Uri, val name: String, val badge: String)
 
 /**
  * C1 — 首页 · 胶卷库.
@@ -90,18 +99,24 @@ fun HomeScreen(
             // The frame is 915 tall (786 of content + a 129 bar). A phone can
             // be shorter, so the content takes what is left and scrolls inside
             // it -- a fixed 786 pushed the bar off the bottom of this device.
+            val scroll = rememberScrollState()
+            // Without this the screen opened scrolled halfway down on the MI 8:
+            // the content is 786 dp against a ~690 dp viewport, and something
+            // (the permission dialog taking focus) moved it. The frame's first
+            // pixel is its header, so the initial state is the top.
+            LaunchedEffect(Unit) { scroll.scrollTo(0) }
             Box(
                 Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScroll(scroll),
             ) {
                 Box(Modifier.fillMaxWidth().height(786.dp)) {
                 Header(onSearch = onSearch)
                 if (current != null) {
                     ContinueCard(
                         roll = current,
-                        frameName = recent.firstOrNull()?.file?.name,
+                        frameName = recent.firstOrNull()?.name,
                         onClick = { onOpenRoll(current) },
                     )
                 }
@@ -150,32 +165,6 @@ fun HomeScreen(
                 }
             }
             BottomActions(onPickAlbum = onPickAlbum, onCamera = onCamera)
-        }
-    }
-}
-
-/**
- * The 412-wide band the frames are authored in, centred on a wider device.
- *
- * Scaling was the alternative and it is worse: a 412 design scaled to 360 would
- * render 22 sp type at 19.2 sp, so the type would no longer be the size the
- * design says. A centred band keeps every number honest and only spends margin.
- */
-@Composable
-private fun ScreenBand(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    BoxWithConstraints(
-        modifier
-            .fillMaxSize()
-            .background(Tokens.Ground),
-        contentAlignment = Alignment.TopCenter,
-    ) {
-        val width = minOf(maxWidth, Tokens.ReferenceWidth)
-        Box(
-            Modifier
-                .width(width)
-                .fillMaxHeight(),
-        ) {
-            content()
         }
     }
 }
@@ -391,9 +380,9 @@ private fun RecentGrid(recent: List<RecentFrame>, onOpen: (RecentFrame) -> Unit)
                 .clip(RoundedCornerShape(Tokens.Radius.Thumb))
                 .background(Color(0xFF241D18))
                 .clickable { onOpen(frame) }
-                .testTag("home-recent-${frame.file.name}"),
+                .testTag("home-recent-${frame.name}"),
         ) {
-            Thumbnail(frame.file)
+            Thumbnail(frame.uri)
             if (index == 0) {
                 Box(
                     Modifier
@@ -419,16 +408,18 @@ private fun RecentGrid(recent: List<RecentFrame>, onOpen: (RecentFrame) -> Unit)
 }
 
 @Composable
-private fun Thumbnail(file: File) {
-    val bitmap = produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, file.path) {
+private fun Thumbnail(uri: Uri) {
+    val context: Context = LocalContext.current.applicationContext
+    val bitmap = produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, uri.toString()) {
         value = withContext(Dispatchers.IO) {
             runCatching {
-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeFile(file.path, bounds)
-                var sample = 1
-                while (bounds.outWidth / sample > 320 || bounds.outHeight / sample > 320) sample *= 2
-                BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
-                    ?.asImageBitmap()
+                // `loadThumbnail` is the platform's own downscaler: it reads
+                // the embedded thumbnail or decodes at the requested size,
+                // which hand-rolled BitmapFactory sampling on a content://
+                // stream did not reliably do -- those tiles came out black.
+                context.contentResolver
+                    .loadThumbnail(uri, android.util.Size(320, 320), null)
+                    .asImageBitmap()
             }.getOrNull()
         }
     }

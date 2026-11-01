@@ -2,7 +2,13 @@ package com.spektralab.app
 
 import android.content.Intent
 import android.net.Uri
+import android.provider.MediaStore
+import android.content.ContentUris
 import android.os.Bundle
+import androidx.core.content.ContextCompat
+import android.os.Build
+import android.content.pm.PackageManager
+import android.Manifest
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -12,8 +18,8 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import com.spektralab.app.rolls.Roll
 import com.spektralab.app.rolls.RollStore
-import com.spektralab.app.ui.home.HomeScreen
-import com.spektralab.app.ui.home.RecentFrame
+import com.spektralab.app.ui.screens.home.HomeScreen
+import com.spektralab.app.ui.screens.home.RecentFrame
 import com.spektralab.app.ui.theme.Tokens
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.background
@@ -55,12 +61,18 @@ class HomeActivity : ComponentActivity() {
 
     private var recent by mutableStateOf<List<RecentFrame>>(emptyList())
 
+    /** API 33 renamed the gallery permission; below it the old one applies. */
+    private val mediaPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { /* either way the grid re-reads in onResume */ }
+
     private val pickImage = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) openInEditor(uri)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        askForGallery()
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(background = Tokens.Ground)) {
                 Surface(modifier = Modifier.fillMaxSize(), color = Tokens.Ground) {
@@ -77,7 +89,7 @@ class HomeActivity : ComponentActivity() {
                             },
                             onPickAlbum = { pickImage.launch(arrayOf("image/*", "application/octet-stream")) },
                             onCamera = { startActivity(CameraActivity.intent(this@HomeActivity)) },
-                            onOpenRecent = { frame -> openInEditor(Uri.fromFile(frame.file)) },
+                            onOpenRecent = { frame -> openInEditor(frame.uri) },
                         )
                     }
                 }
@@ -96,6 +108,17 @@ class HomeActivity : ComponentActivity() {
         }
     }
 
+    private fun askForGallery() {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_IMAGES
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
+            mediaPermission.launch(permission)
+        }
+    }
+
     private fun openInEditor(uri: Uri) {
         startActivity(
             Intent(this, MainActivity::class.java).apply {
@@ -105,13 +128,40 @@ class HomeActivity : ComponentActivity() {
         )
     }
 
-    /** The camera's own directory, newest first, with the extension badge. */
+    /**
+     * The device's own gallery, newest first.
+     *
+     * Reading this app's capture directory was wrong: the phone is full of
+     * photographs before this app has taken any, and "最近照片" that shows none
+     * of them is not a home screen. `MediaStore` needs the READ_MEDIA_IMAGES
+     * grant on API 33+ and READ_EXTERNAL_STORAGE below it; without it the grid
+     * says so rather than pretending the phone is empty.
+     */
     private fun recentFrames(): List<RecentFrame> {
-        val directory = File(cacheDir, "captures")
-        val files = directory.listFiles { file -> file.isFile } ?: return emptyList()
-        return files
-            .sortedByDescending { it.lastModified() }
-            .take(6)
-            .map { RecentFrame(it, it.extension.uppercase().ifEmpty { "IMG" }) }
+        val projection = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME,
+        )
+        val found = mutableListOf<RecentFrame>()
+        contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            projection,
+            null,
+            null,
+            "${MediaStore.Images.Media.DATE_ADDED} DESC",
+        )?.use { cursor ->
+            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+            val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+            while (cursor.moveToNext() && found.size < 6) {
+                val id = cursor.getLong(idColumn)
+                val name = cursor.getString(nameColumn) ?: continue
+                val uri = ContentUris.withAppendedId(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    id,
+                )
+                found += RecentFrame(uri, name, name.substringAfterLast('.', "IMG").uppercase())
+            }
+        }
+        return found
     }
 }
