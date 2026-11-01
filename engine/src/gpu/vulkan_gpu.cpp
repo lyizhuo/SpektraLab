@@ -321,20 +321,42 @@ public:
             detail = "Vulkan probe passed (precise product + fused fma; full shader parity pending)";
             return true;
         }
-        if (zero && !exact && properties_.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) {
+        if (zero && !exact) {
             // The double-float kernels then take an exact Dekker product
             // instead of fma (specialization constant 0; see two_prod in
             // spk_iir_df_acc.comp): without it the IIR blur's low word is lost
             // and the recursion amplifies it -- 0.4 % on a 257-px constant row.
+            //
+            // **Not only on a CPU device.** The guard was written from the
+            // Windows port's sample -- NVIDIA, AMD and Intel, where `fma()` is
+            // genuinely fused -- and it refused anything else. Vulkan requires
+            // only that fma not be *contracted*; it does not oblige a driver to
+            // fuse one, and mobile drivers commonly lower GLSL `fma()` to a
+            // multiply and an add. A phone reported exactly that on 2026-11-01
+            // (`spk_engine_create failed: Vulkan math probe: fma is not fused on
+            // a GPU device`), so the app could not open on hardware while every
+            // emulator run passed -- the emulator is a CPU device and took the
+            // branch below.
+            //
+            // Accepting is the same trade this branch already made: one rounding
+            // per fma, far inside the 3e-5 render bar, and the double-float
+            // kernels are made exact by the Dekker product rather than left to
+            // the driver. It is reported in `capabilities.backend.math_mode`,
+            // never silently.
             fused_fma_ = 0;
-            detail = "Vulkan probe passed on a CPU device with unfused fma (double-float kernels use an "
-                     "exact Dekker product; full shader parity pending)";
-            probe_cpu_storage_range(detail);
+            const bool cpu = properties_.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU;
+            detail = std::string("Vulkan probe passed with unfused fma (") + (cpu ? "CPU" : "GPU") +
+                     " device; double-float kernels use an exact Dekker product; one rounding per fma "
+                     "differs from a fused device, inside the render bar)";
+            // Only lavapipe's advertised storage range is a lie. A GPU keeps
+            // whatever it advertises.
+            if (cpu) probe_cpu_storage_range(detail);
             return true;
         }
         if (!exact && !zero) { detail = "Vulkan math probe produced no informative residuals"; return false; }
         detail = zero && exact ? "Vulkan math probe: fma is fused for some lanes and not others"
-                               : "Vulkan math probe: fma is not fused on a GPU device (fast or contracted math?)";
+                               : "Vulkan math probe: fma is not fused and the residuals are not all zero "
+                                 "(fast or contracted math?)";
         return false;
     }
 
