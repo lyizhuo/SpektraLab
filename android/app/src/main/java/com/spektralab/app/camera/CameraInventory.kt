@@ -81,6 +81,17 @@ class CameraInventory(context: Context) {
         }
 
         val lenses = specs.values.sortedBy { it.equivalentMm }
+        // One line per probe: which physical lenses the device really
+        // exposes, in millimetres and in RAW capability. Without it a
+        // lens bar that offers nothing looks like a UI bug.
+        Log.i(
+            TAG,
+            "lenses=" + lenses.joinToString {
+                "${it.cameraId}:${it.equivalentMm.toInt()}mm raw=${it.hasRaw}"
+            } + " stops=" + LensPlanner.plan(lenses).zoomStops.joinToString {
+                "${it.ratio}x lens=${it.lens?.cameraId ?: "none"}"
+            },
+        )
         return ProbeResult(lenses, LensPlanner.plan(lenses), sawAny)
     }
 

@@ -125,11 +125,7 @@ object LensPlanner {
      */
     fun plan(lenses: List<LensSpec>): LensPlan {
         if (lenses.isEmpty()) {
-            return LensPlan(
-                listOf(
-                    ZoomStop(1f, null, UnavailableReason.NO_PHYSICAL_CAMERA),
-                ),
-            )
+            return LensPlan(listOf(ZoomStop(1f, null, UnavailableReason.NO_PHYSICAL_CAMERA)))
         }
 
         val main = pickMain(lenses)
@@ -142,16 +138,18 @@ object LensPlanner {
             .filter { it.equivalentMm >= main.equivalentMm * TELE_MIN_RATIO }
             .minByOrNull { it.equivalentMm }     // the closest to the main lens
 
-        val uwRatio = ultrawide?.let { it.equivalentMm / main.equivalentMm } ?: 0.7f
-        val teleRatio = tele?.let { it.equivalentMm / main.equivalentMm } ?: 2.0f
+        // Only the stops this device can actually shoot. The frame draws three
+        // because the prototype device had three; a bar offering a lens the
+        // phone does not have is a dead button, and a dead button in a camera is
+        // worse than a shorter bar. Measured: the MI 8 exposes one rear camera,
+        // so its bar is one stop — which is the truth about that phone.
+        val stops = buildList {
+            ultrawide?.let { add(ZoomStop(round2(it.equivalentMm / main.equivalentMm), it)) }
+            add(ZoomStop(1f, main))
+            tele?.let { add(ZoomStop(round2(it.equivalentMm / main.equivalentMm), it)) }
+        }.sortedBy { it.ratio }
 
-        return LensPlan(
-            listOf(
-                ZoomStop(round2(uwRatio), ultrawide, if (ultrawide == null) UnavailableReason.NO_ULTRAWIDE else null),
-                ZoomStop(1f, main),
-                ZoomStop(round2(teleRatio), tele, if (tele == null) UnavailableReason.NO_TELE else null),
-            ),
-        )
+        return LensPlan(stops)
     }
 
     /**

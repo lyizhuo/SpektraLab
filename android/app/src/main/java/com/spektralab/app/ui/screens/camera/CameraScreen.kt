@@ -29,6 +29,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.FlipCameraAndroid
+import androidx.compose.material.icons.outlined.FlashOn
+import kotlinx.coroutines.delay
 import androidx.compose.material.icons.outlined.FlashOff
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -55,6 +57,8 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import android.content.res.Configuration
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -120,6 +124,17 @@ fun CameraScreen(
     var selectedStop by remember(plan) { mutableStateOf(plan.main ?: stops.first()) }
     var openSession by remember { mutableStateOf<RawCameraSession?>(null) }
     var readout by remember { mutableStateOf(ExposureReadout.UNKNOWN) }
+    var torchOn by remember { mutableStateOf(false) }
+
+    // The readout lives in the session and changes on every frame; the
+    // screen has to ask for it. A state read inside `AndroidView.update`
+    // does not subscribe, so this polls the field the callback writes.
+    LaunchedEffect(openSession) {
+        while (true) {
+            openSession?.let { readout = it.readout }
+            delay(400)
+        }
+    }
     var readiness by remember {
         mutableStateOf<CaptureReadiness>(CaptureReadiness.Blocked(BlockReason.NO_CAMERA))
     }
@@ -190,7 +205,15 @@ fun CameraScreen(
                 .windowInsetsPadding(WindowInsets.safeDrawing)
                 .padding(horizontal = 16.dp),
         ) {
-            TopControls(filmLabel = filmLabel, onClose = onClose)
+        TopControls(
+            filmLabel = filmLabel,
+            onClose = onClose,
+            torchOn = torchOn,
+            onToggleTorch = {
+                torchOn = !torchOn
+                openSession?.setTorch(torchOn)
+            },
+        )
             ReadoutRow(readout = readout)
             CompositionGuides(
                 Modifier
@@ -297,7 +320,17 @@ private fun Viewfinder(
         val buffer = remember(selectedStop) {
             RawCameraSession.previewSizeFor(context, selectedStop.lens)
         }
-        val bufferAspect = buffer.width.toFloat() / buffer.height.toFloat()
+        // A camera buffer is always landscape; a portrait phone shows it
+        // turned, so the view takes the inverse. Using the buffer
+        // aspect directly drew a landscape letterbox in the middle of a
+        // portrait screen — which is not how any camera previews.
+        val portrait = LocalConfiguration.current.orientation ==
+            Configuration.ORIENTATION_PORTRAIT
+        val bufferAspect = if (portrait) {
+            buffer.height.toFloat() / buffer.width.toFloat()
+        } else {
+            buffer.width.toFloat() / buffer.height.toFloat()
+        }
         // Fit inside, never fill: the sensor's whole field is visible.
         val preview = Modifier
             .fillMaxSize()
@@ -350,7 +383,12 @@ private fun Viewfinder(
 }
 
 @Composable
-private fun TopControls(filmLabel: String, onClose: () -> Unit) {
+private fun TopControls(
+    filmLabel: String,
+    onClose: () -> Unit,
+    torchOn: Boolean,
+    onToggleTorch: () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth().padding(top = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -380,8 +418,16 @@ private fun TopControls(filmLabel: String, onClose: () -> Unit) {
                 )
             }
         }
-        ScrimIconButton(onClick = {}, tag = "camera-flash") {
-            Icon(Icons.Outlined.FlashOff, contentDescription = "闪光灯", modifier = Modifier.size(18.dp))
+        ScrimIconButton(
+            onClick = onToggleTorch,
+            tag = "camera-flash",
+        ) {
+            Icon(
+                if (torchOn) Icons.Outlined.FlashOn else Icons.Outlined.FlashOff,
+                contentDescription = "闪光灯",
+                tint = if (torchOn) MaterialTheme.colorScheme.primary else Color.White,
+                modifier = Modifier.size(18.dp),
+            )
         }
     }
 }
