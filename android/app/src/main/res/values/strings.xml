@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">SpektraLab</string>
+    <string name="app_name">Latent</string>
 
     <!-- C3. The camera is optional at the manifest level: a tablet with no rear
          camera still runs the editor and the importer. See uses-feature. -->

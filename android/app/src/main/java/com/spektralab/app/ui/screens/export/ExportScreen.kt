@@ -206,7 +206,7 @@ fun ExportScreen(
         SettingRow("位置", directoryLabel ?: "Pictures/SpektraLab", 710.dp, onClick = onPickDirectory)
 
         // ---- actions -------------------------------------------------------
-        Layer(x = 0.dp, y = 829.dp, width = 412.dp, height = 86.dp) {
+        Layer(x = 0.dp, y = 829.dp, fillWidth = true, height = 86.dp) {
             Box(Modifier.fillMaxSize().background(Color(0x0FFFFFFF)))
             Box(Modifier.fillMaxWidth().height(1.dp).background(Tokens.Hairline))
             Box(

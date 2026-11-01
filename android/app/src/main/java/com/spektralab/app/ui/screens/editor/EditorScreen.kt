@@ -86,7 +86,7 @@ fun EditorScreen(
 ) {
     ScreenBand {
         // ---- topbar --------------------------------------------------------
-        Layer(x = 0.dp, y = 40.dp, width = 412.dp, height = 52.dp) {
+        Layer(x = 0.dp, y = 40.dp, fillWidth = true, height = 52.dp) {
             Box(
                 Modifier
                     .offset(x = 12.dp, y = 12.dp)
@@ -152,8 +152,26 @@ fun EditorScreen(
             }
         }
 
+        // ---- the engine's own words ---------------------------------------
+        // The frame draws no place for a failure, but a screen that swallows one
+        // is indistinguishable from a broken one: this is the line that turns
+        // "black canvas" into a sentence. It sits under the topbar, where C3
+        // puts its refusal.
+        val notice = state.error ?: state.message
+        if (notice != null) {
+            Text(
+                text = notice,
+                style = TextStyle(fontFamily = Tokens.Sans, fontSize = 9.sp, color = Color(0xFFFFB4A2)),
+                maxLines = 2,
+                modifier = Modifier
+                    .offset(x = 20.dp, y = 96.dp)
+                    .width(280.dp)
+                    .testTag("editor-notice"),
+            )
+        }
+
         // ---- canvas --------------------------------------------------------
-        Layer(x = 0.dp, y = 92.dp, width = 412.dp, height = 605.dp) {
+        Layer(x = 0.dp, y = 92.dp, fillWidth = true, height = 605.dp) {
             Box(Modifier.fillMaxSize().background(Color(0xFF0C0B0A)))
             Safelight()
             FilmFrame(
@@ -173,7 +191,7 @@ fun EditorScreen(
         }
 
         // ---- filmstrip -----------------------------------------------------
-        Layer(x = 0.dp, y = 757.dp, width = 412.dp, height = 76.dp) {
+        Layer(x = 0.dp, y = 757.dp, fillWidth = true, height = 76.dp) {
             Box(Modifier.fillMaxSize().background(Color(0xFF151210)))
             Box(
                 Modifier
@@ -226,7 +244,7 @@ fun EditorScreen(
         }
 
         // ---- toolbar -------------------------------------------------------
-        Layer(x = 0.dp, y = 833.dp, width = 412.dp, height = 72.dp) {
+        Layer(x = 0.dp, y = 833.dp, fillWidth = true, height = 72.dp) {
             Box(Modifier.fillMaxSize().background(Tokens.Bar))
             // 导出
             Box(

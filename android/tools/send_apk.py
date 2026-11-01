@@ -220,8 +220,8 @@ def send_via_r2(apk_path: Path, project_root: Path, cfg: dict, caption: str) -> 
     version = version_name(project_root)
     # Keep each project's builds under its own prefix: the prune below must not
     # delete another app's APKs that share the bucket.
-    prefix = "apk/spektralab/"
-    key = f"{prefix}SpektraLab-v{version}-{git_short(project_root)}.apk"
+    prefix = "apk/latent/"
+    key = f"{prefix}Latent-v{version}-{git_short(project_root)}.apk"
     size_mb = apk_path.stat().st_size / (1024 * 1024)
 
     print(f"[r2] Uploading {apk_path.name} ({size_mb:.1f} MB) to s3://{bucket}/{key}")

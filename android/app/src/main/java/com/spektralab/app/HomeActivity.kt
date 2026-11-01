@@ -20,6 +20,9 @@ import com.spektralab.app.rolls.Roll
 import com.spektralab.app.rolls.RollStore
 import com.spektralab.app.ui.screens.home.HomeScreen
 import com.spektralab.app.ui.screens.home.RecentFrame
+import com.spektralab.app.ui.theme.SpektraLabTheme
+import com.spektralab.app.ui.theme.SpektraLabTheme
+import com.spektralab.app.ui.theme.SpektraLabTheme
 import com.spektralab.app.ui.theme.Tokens
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.background
@@ -77,7 +80,7 @@ class HomeActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         askForGallery()
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(background = Tokens.Ground)) {
+            SpektraLabTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = Tokens.Ground) {
                     Box(Modifier.fillMaxSize().background(Tokens.Ground)) {
                         HomeScreen(

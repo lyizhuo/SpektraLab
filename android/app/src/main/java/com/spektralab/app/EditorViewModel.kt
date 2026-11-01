@@ -173,6 +173,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
+                android.util.Log.e("SpektraLab", "open failed", failure)
                 _state.value = _state.value.copy(phase = Phase.Error, error = failure.message ?: failure.toString())
             } finally {
                 _state.value = _state.value.copy(busy = false)

@@ -47,10 +47,14 @@ import com.spektralab.app.ui.screens.editor.StripEntry
 import com.spektralab.app.ui.screens.editor.frameNumber
 import com.spektralab.app.ui.screens.editor.stockOf
 import com.spektralab.app.ui.screens.export.ExportScreen
+import com.spektralab.app.ui.theme.SpektraLabTheme
+import com.spektralab.app.ui.theme.SpektraLabTheme
+import com.spektralab.app.ui.theme.SpektraLabTheme
 import com.spektralab.app.ui.theme.Tokens
 import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -78,6 +82,9 @@ class MainActivity : ComponentActivity() {
     /** C2's rows while an import is running, and whether that screen is up. */
     private var importRows by mutableStateOf<List<ImportRow>>(emptyList())
     private var importOpen by mutableStateOf(false)
+
+    /** The last import failure, shown on C2 rather than swallowed. */
+    private var errorLine by mutableStateOf<String?>(null)
 
     /** B1 is up when a batch arrived; the set is the frames it carries. */
     private var batchUris by mutableStateOf<List<Uri>>(emptyList())
@@ -110,7 +117,20 @@ class MainActivity : ComponentActivity() {
                     it[index] = it[index].copy(state = ImportRow.State.Working)
                 }
                 viewModel.open(uri, nameOf(uri))
-                val settled = viewModel.state.first { it.phase == Phase.Ready || it.phase == Phase.Error }
+                // Waiting on `phase == Ready` alone is a trap: the previous
+                // file already left the state Ready, so `first` returns at once
+                // and the sequence races ahead — on the MI 8 that showed as an
+                // import screen stuck at 0% over a black preview. The wait has
+                // to name *this* file.
+                val settled = withTimeoutOrNull(120_000) {
+                    viewModel.state.first {
+                        it.source?.uri == uri && (it.phase == Phase.Ready || it.phase == Phase.Error)
+                    }
+                }
+                if (settled == null) {
+                    errorLine = "导入超时：${nameOf(uri)}"
+                    return@launch
+                }
                 importRows = importRows.toMutableList().also {
                     it[index] = it[index].copy(
                         state = if (settled.phase == Phase.Ready) ImportRow.State.Done else ImportRow.State.Waiting,
@@ -170,7 +190,7 @@ class MainActivity : ComponentActivity() {
             batchOpen = true
         }
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(background = Tokens.Ground)) {
+            SpektraLabTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = Tokens.Ground) {
                     val state by viewModel.state.collectAsState()
                     var tool by remember { mutableStateOf<EditorTool?>(null) }
@@ -215,8 +235,10 @@ class MainActivity : ComponentActivity() {
                                         var done = 0
                                         for (uri in targets) {
                                             viewModel.open(uri, nameOf(uri))
-                                            viewModel.state.first {
-                                                it.phase == Phase.Ready || it.phase == Phase.Error
+                                            withTimeoutOrNull(120_000) {
+                                                viewModel.state.first {
+                                                    it.source?.uri == uri && it.phase == Phase.Ready
+                                                }
                                             }
                                             viewModel.setParams(syncDelta(source, groups))
                                             done++

@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -43,15 +46,55 @@ fun ScreenBand(
     content: @Composable () -> Unit,
 ) {
     BoxWithConstraints(
-        modifier.fillMaxSize().background(background),
-        contentAlignment = Alignment.TopCenter,
+        modifier
+            .fillMaxSize()
+            .background(background)
+            // The system bars are part of the problem, not decoration: the MI 8
+            // gives ~766 dp of usable height, and guessing it was what put C3's
+            // shutter 90 dp above its place.
+            .safeDrawingPadding(),
     ) {
-        Box(Modifier.width(minOf(maxWidth, Tokens.ReferenceWidth)).fillMaxHeight()) {
-            content()
+        // One picture, one scale. The frames are 412×915 and every offset in
+        // every screen is written in that space; drawing them at their own
+        // coordinates and scaling the *result* keeps every proportion, whereas
+        // capping the width (the previous attempt) fixed the right edge and left
+        // the bottom 100 dp off a 766 dp screen.
+        //
+        // The trade is honest and worth naming: type scales with the frame, so
+        // a 13 sp label renders at 11.9 sp on a 393 dp phone instead of the
+        // system's chosen size. A layout built from anchors and weights would
+        // not do that, and that conversion is the next step — but it is a
+        // rewrite of eight screens, and this makes every one of them correct on
+        // every device today.
+        val scale = minOf(
+            maxWidth / Tokens.ReferenceWidth,
+            maxHeight / ReferenceHeight,
+        )
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier
+                    .width(Tokens.ReferenceWidth * scale)
+                    .height(ReferenceHeight * scale),
+            ) {
+                Box(
+                    Modifier
+                        .width(Tokens.ReferenceWidth)
+                        .height(ReferenceHeight)
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            transformOrigin = TransformOrigin(0f, 0f),
+                        ),
+                ) {
+                    content()
+                }
+            }
         }
     }
 }
 
+/** The frames' own height, in the same space as [Tokens.ReferenceWidth]. */
+val ReferenceHeight: Dp = 915.dp
 /**
  * A layer at the frame's `x`/`y`, optionally sized.
  *
@@ -64,10 +107,18 @@ fun Layer(
     y: Dp,
     width: Dp? = null,
     height: Dp? = null,
+    fillWidth: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
 ) {
     var modifier: Modifier = Modifier.offset(x = x, y = y)
-    if (width != null) modifier = modifier.width(width)
+    // A screen's full-width bands must follow the *band*, never the frame's
+    // 412: the MI 8 is 393 dp wide, and a child that insists on 412 hangs 19 dp
+    // off the right edge — which is the "width is wrong" report, verbatim.
+    modifier = when {
+        fillWidth -> modifier.fillMaxWidth()
+        width != null -> modifier.width(width)
+        else -> modifier
+    }
     if (height != null) modifier = modifier.height(height)
     Box(modifier, content = content)
 }

@@ -87,7 +87,7 @@ fun BatchScreen(
         }
 
         // ---- canvas: the current frame inside a film edge ------------------
-        Layer(x = 0.dp, y = 92.dp, width = 412.dp, height = 520.dp) {
+        Layer(x = 0.dp, y = 92.dp, fillWidth = true, height = 520.dp) {
             Box(Modifier.fillMaxSize().background(Color(0xFF0C0B0A)))
             Layer(x = 44.dp, y = 30.dp, width = 324.dp, height = 460.dp) {
                 Box(
@@ -143,7 +143,7 @@ fun BatchScreen(
         }
 
         // ---- filmstrip, with the selected frames marked --------------------
-        Layer(x = 0.dp, y = 612.dp, width = 412.dp, height = 62.dp) {
+        Layer(x = 0.dp, y = 612.dp, fillWidth = true, height = 62.dp) {
             Box(Modifier.fillMaxSize().background(Color(0xFF151210)))
             Row(
                 Modifier.offset(x = 16.dp, y = 8.dp),
@@ -180,7 +180,7 @@ fun BatchScreen(
         }
 
         // ---- select-actions ------------------------------------------------
-        Layer(x = 0.dp, y = 674.dp, width = 412.dp, height = 241.dp) {
+        Layer(x = 0.dp, y = 674.dp, fillWidth = true, height = 241.dp) {
             Box(Modifier.fillMaxSize().background(Color(0xF7181513)))
             Box(Modifier.fillMaxWidth().height(1.dp).background(Tokens.PillHairline))
             Text(

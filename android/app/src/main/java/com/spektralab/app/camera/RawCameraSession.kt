@@ -17,6 +17,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.util.Size
+import android.view.SurfaceHolder
 import android.view.Surface
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.File
@@ -70,6 +71,9 @@ class RawCameraSession(
 
     /** The RAW size this sensor actually produces, e.g. 4000×3000 binned. */
     var rawSize: Size = Size(0, 0)
+
+    /** The viewfinder's buffer size, pinned by [previewSizeFor]. */
+    var previewSize: Size = Size(0, 0)
         private set
 
     /**
@@ -113,6 +117,10 @@ class RawCameraSession(
                         reader = imageReader
                         imageReader.setOnImageAvailableListener({ r -> onImage(r) }, handler)
 
+                        // Pin the buffer to the size the caller already told the
+                        // SurfaceHolder, so the view and the stream agree.
+                        val preview = choosePreviewSize(map.getOutputSizes(SurfaceHolder::class.java)?.toList().orEmpty())
+                        previewSize = preview
                         val outputs = listOfNotNull(previewTarget, imageReader.surface)
                         @Suppress("DEPRECATION")
                         camera.createCaptureSession(outputs, object : CameraCaptureSession.StateCallback() {
@@ -287,7 +295,46 @@ class RawCameraSession(
         thread.quitSafely()
     }
 
-    private companion object {
+    companion object {
+    /**
+    * The viewfinder's buffer size.
+    *
+    * It is chosen and handed to `SurfaceHolder.setFixedSize` by the caller, not
+    * left to the view. A SurfaceView sized by the layout makes the camera scale
+    * its output into whatever the view happens to be — that is the stretch a
+    * 4:3 sensor shows on a 19.5:9 phone, and no amount of aspect-ratio on the
+    * view fixes it while the buffer is still the view's size.
+    *
+    * A 2 MP ceiling keeps the preview cheap; 16:9 is preferred because it is
+    * the shape phones actually display, so the centre-crop discards the least.
+    */
+    fun previewSizeFor(context: Context, lens: LensSpec?): Size {
+        if (lens == null) return Size(1920, 1080)
+        val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val map = manager.getCameraCharacteristics(lens.cameraId)
+            .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?: return Size(1920, 1080)
+        return choosePreviewSize(map.getOutputSizes(SurfaceHolder::class.java)?.toList().orEmpty())
+    }
+
+    /**
+     * The one place a viewfinder size is decided.
+     *
+     * A 2 MP ceiling keeps the preview cheap and leaves the GPU for the render;
+     * 16:9 wins ties because it is the shape phones display, so the centre-crop
+     * throws away the least picture. Aspect is weighted above area on purpose:
+     * a 4:3 2 MP is a worse viewfinder than a 16:9 1080p even though it has more
+     * pixels.
+     */
+    private fun choosePreviewSize(sizes: List<Size>): Size {
+        if (sizes.isEmpty()) return Size(1920, 1080)
+        val withinBudget = sizes.filter { it.width.toLong() * it.height <= 2_100_000L }
+            .ifEmpty { listOf(sizes.minByOrNull { it.width.toLong() * it.height }!!) }
+        return withinBudget.minByOrNull { size ->
+            val aspectError = kotlin.math.abs(size.width.toDouble() / size.height - 16.0 / 9.0)
+            aspectError * 1000 + kotlin.math.abs(size.width.toLong() * size.height - 2_073_600L) / 1_000_000.0
+        } ?: sizes.first()
+    }
         const val TAG = "RawCameraSession"
     }
 }
@@ -318,6 +365,7 @@ data class ExposureReadout(
     val isoLabel: String get() = if (iso > 0) "ISO $iso" else ""
 
     companion object {
+
         val UNKNOWN = ExposureReadout(0, 0L, 0f)
 
         fun of(result: CaptureResult, lens: LensSpec): ExposureReadout = ExposureReadout(

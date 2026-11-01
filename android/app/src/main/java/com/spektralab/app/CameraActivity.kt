@@ -9,6 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
+import com.spektralab.app.ui.theme.SpektraLabTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
@@ -69,7 +70,7 @@ class CameraActivity : ComponentActivity() {
         val current = roll!!
 
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
+            SpektraLabTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     CameraScreen(
                         hasPermission = ContextCompat.checkSelfPermission(
