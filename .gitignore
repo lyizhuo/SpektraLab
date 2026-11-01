@@ -366,3 +366,8 @@ tools/figma-mcp/headers.txt
 tools/figma-mcp/vendor/
 .tmp/
 
+
+# Android session artifacts: the prototype captures, the Figma OAuth token
+# helper and the throwaway shots are working material, not product.
+.codex/
+.tmp/

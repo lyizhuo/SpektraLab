@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from the prototype's own icon art by .tmp/icons.py. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp"
+    android:height="20dp"
+    android:viewportWidth="20"
+    android:viewportHeight="20">
+    <path
+        android:pathData="M12.0833 3.33333H7.91667L5.83333 5.83333H3.33333C2.89131 5.83333 2.46738 6.00893 2.15482 6.32149C1.84226 6.63405 1.66667 7.05797 1.66667 7.5V15C1.66667 15.442 1.84226 15.866 2.15482 16.1785C2.46738 16.4911 2.89131 16.6667 3.33333 16.6667H16.6667C17.1087 16.6667 17.5326 16.4911 17.8452 16.1785C18.1577 15.866 18.3333 15.442 18.3333 15V7.5C18.3333 7.05797 18.1577 6.63405 17.8452 6.32149C17.5326 6.00893 17.1087 5.83333 16.6667 5.83333H14.1667L12.0833 3.33333Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.33333"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M12.5 10.8333C12.5 12.214 11.3807 13.3333 10 13.3333C8.61929 13.3333 7.5 12.214 7.5 10.8333C7.5 9.45262 8.61929 8.33333 10 8.33333C11.3807 8.33333 12.5 9.45262 12.5 10.8333Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.33333"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>
