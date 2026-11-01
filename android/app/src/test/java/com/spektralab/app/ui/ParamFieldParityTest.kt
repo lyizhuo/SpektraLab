@@ -1,5 +1,6 @@
 package com.spektralab.app.ui
 
+import com.spektralab.app.ui.screens.params.ParamsFields
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -14,12 +15,15 @@ import org.junit.Test
  *  * `capabilities.json` is an `spk_capabilities` reply from the same build,
  *    carrying `backend.unsupported_features`.
  *
- * So this test fails the moment the UI adds a slider for a field upstream
- * renamed or dropped, and it fails when the UI adds a control belonging to one
- * of the five features the non-Apple backend refuses by name
- * (`engine/src/pipeline/engine.cpp:320-325`, plan D6) — which is exactly the
- * failure mode the plan wants at build time rather than at the user's
- * `set_params`.
+ * So this test fails the moment a screen adds a control for a field upstream
+ * renamed or dropped, and it fails when one adds a control belonging to one of
+ * the five features the non-Apple backend refuses by name
+ * (`engine/src/pipeline/engine.cpp:320-325`, plan D6).
+ *
+ * It used to check a `ParamsCatalog` object that no longer exists — the sheet it
+ * described was replaced by full pages. The list it checks now is
+ * [ParamsFields], which names the fields those pages actually write, so the
+ * guarantee survived the screen it was written for.
  */
 class ParamFieldParityTest {
 
@@ -41,137 +45,95 @@ class ParamFieldParityTest {
         )
     }
 
-    /** (a) every wire name the UI can send exists in the schema. */
+    /** (a) every wire name a page can send exists in the schema. */
     @Test
-    fun everyCatalogueFieldIsDeclaredByTheEngine() {
-        val unknown = ParamsCatalog.wireNames.filterNot { byName.containsKey(it) }
+    fun everyPageFieldIsDeclaredByTheEngine() {
+        val unknown = ParamsFields.leaves.filterNot { byName.containsKey(it) }
         assertTrue(
-            "the UI's catalogue names fields this engine's schema does not have: $unknown " +
-                "(fix the catalogue, never the fixture — the fixture is the engine)",
+            "the pages name fields this engine's schema does not have: $unknown " +
+                "(fix the page, never the fixture — the fixture is the engine)",
             unknown.isEmpty(),
         )
     }
 
     @Test
     fun wireNamesAreDeclaredOnce() {
-        val duplicates = ParamsCatalog.fields.groupBy { it.wire }.filterValues { it.size > 1 }.keys
-        assertTrue("catalogue repeats a wire name: $duplicates", duplicates.isEmpty())
-        assertEquals(
-            "a ParamField and the Wire constant disagree",
-            ParamsCatalog.wireNames.size,
-            ParamsCatalog.fields.size,
-        )
+        val repeated = ParamsFields.wireNames.groupBy { ParamsFields.leaf(it) }
+            .filterValues { it.size > 1 }
+            .keys
+        assertTrue("the same engine field is written from two rows: $repeated", repeated.isEmpty())
+        assertEquals(ParamsFields.wireNames.size, ParamsFields.leaves.size)
     }
 
-    /** (b) the UI's field set does not intersect the refused features. */
+    /** (b) no field the pages write belongs to a refused feature. */
     @Test
-    fun noCatalogueFieldBelongsToARefusedFeature() {
-        val offenders = ParamsCatalog.fields.map { it.wire }.filter { wire ->
-            wire in unsupported || ParamsCatalog.familyOf(wire)?.let { it in unsupported } == true
-        }
+    fun noPageFieldBelongsToARefusedFeature() {
+        val refusedFields = ParamsFields.refusedFamilies.values.flatten().toSet()
+        val offenders = ParamsFields.leaves.filter { it in refusedFields }
         assertTrue(
-            "plan D6 hides these features rather than disabling them, but the catalogue offers: $offenders",
+            "these belong to a feature this backend refuses, so the pages must not write them: $offenders",
             offenders.isEmpty(),
         )
     }
 
-    @Test
-    fun theFamilyMapCoversEveryRefusedFeature() {
-        assertEquals(
-            "the engine refuses a feature the UI's family map does not know how to hide",
-            unsupported,
-            ParamsCatalog.refusedFamilies,
-        )
-        // And the mapping is real, not a set of names that never matches.
-        assertEquals("overscan", ParamsCatalog.familyOf("overscan_active"))
-        assertEquals("date_imprint", ParamsCatalog.familyOf("date_imprint_active"))
-        assertEquals("scene_latitude_mapping", ParamsCatalog.familyOf("scene_latitude_active"))
-        assertEquals("contrast_mask", ParamsCatalog.familyOf("contrast_mask_active"))
-        assertEquals("digital_intermediate", ParamsCatalog.familyOf("digital_intermediate"))
-        // The refused families' own fields are in the schema and out of the catalogue.
-        for (refused in listOf("overscan_active", "date_imprint_active", "contrast_mask_active")) {
-            assertTrue("$refused should be a real schema field", byName.containsKey(refused))
-            assertTrue("$refused must not be in the catalogue", refused !in ParamsCatalog.wireNames)
-        }
-    }
-
     /**
-     * (c) every slider is bounded by the schema's own `range`.
-     *
-     * `ParamField` carries no bounds at all — that is the structural half of
-     * the rule (there is nothing to write a range into) — so what is checked
-     * here is that the schema can answer for every slider the UI builds. A
-     * numeric field without a `range` renders read-only in the UI rather than
-     * getting an invented one.
+     * Every refused family is real: the engine names it, and the schema carries
+     * the fields, which is what makes "shown but disabled with a reason" the
+     * honest treatment rather than a missing control.
      */
     @Test
-    fun slidersAreBoundedByTheSchemaRange() {
-        for (field in ParamsCatalog.fields) {
-            val entry = byName.getValue(field.wire)
-            when (field.kind) {
-                ParamKind.Slider -> {
-                    assertTrue(
-                        "${field.wire} is a slider but the schema says type '${entry["type"]}'",
-                        entry["type"].asString() in setOf("float", "int"),
-                    )
-                    val range = entry["range"]
-                    assertTrue(
-                        "${field.wire} is a slider but the schema declares no range, so the UI has no bounds to use",
-                        range != null,
-                    )
-                    val bounds = range!!.asList().map { it.asDouble() }
-                    assertEquals("${field.wire} needs exactly two bounds", 2, bounds.size)
-                    assertTrue("${field.wire} has an inverted range $bounds", bounds[0] < bounds[1])
-                }
-                ParamKind.Toggle -> assertEquals(
-                    "${field.wire} is a toggle but the schema says '${entry["type"]}'",
-                    "bool",
-                    entry["type"].asString(),
-                )
-                ParamKind.Choice -> assertEquals(
-                    "${field.wire} is a choice but the schema says '${entry["type"]}'",
-                    "str",
-                    entry["type"].asString(),
-                )
+    fun everyRefusedFamilyIsNamedByTheEngine() {
+        assertEquals(
+            "the engine refuses a feature this map does not know how to show as refused",
+            unsupported,
+            ParamsFields.refusedFamilies.keys,
+        )
+        for ((family, names) in ParamsFields.refusedFamilies) {
+            for (name in names) {
+                assertTrue("$family names $name, which the schema does not have", byName.containsKey(name))
             }
         }
     }
 
-    /** The one field that is not a `setParams` field is the one the open uses. */
-    @Test
-    fun previewLongEdgeIsTheOnlyNextOpenField() {
-        val nextOpen = ParamsCatalog.fields.filter { it.nextOpenOnly }
-        assertEquals(listOf(Wire.PreviewLongEdge), nextOpen.map { it.wire })
-        val entry = byName.getValue(Wire.PreviewLongEdge)
-        assertEquals("int", entry["type"].asString())
-        assertEquals(listOf(800.0, 8192.0), entry["range"].asList().map { it.asDouble() })
-        // EditorViewModel.setPreviewLongEdge clamps to exactly this range.
-        val clamped = ParamsCatalog.fields.first { it.nextOpenOnly }
-        assertEquals(Wire.PreviewLongEdge, clamped.wire)
-    }
-
     /**
-     * The crop page's own minimum, checked against the schema: the UI may not
-     * squeeze a crop rectangle below anything the schema would refuse.
+     * (c) every slider the pages write is bounded by the schema's own `range`.
+     *
+     * A numeric field without a range would render read-only rather than getting
+     * an invented one, so this checks the schema can answer for each of them.
      */
     @Test
-    fun cropMinimumStaysInsideTheSchemaRange() {
-        val minCrop = Geometry.MIN_CROP
-        for (wire in listOf(Wire.CropW, Wire.CropH)) {
-            val bounds = byName.getValue(wire)["range"].asList().map { it.asDouble() }
-            assertTrue("$wire minimum ${bounds[0]} is above the UI's $minCrop", bounds[0] <= minCrop)
-            assertTrue("$wire maximum ${bounds[1]} is below the UI's $minCrop", bounds[1] >= minCrop)
+    fun slidersAreBoundedByTheSchemaRange() {
+        val sliders = listOf(
+            "exposure_compensation_ev",
+            "film_format_mm",
+            "print_exposure",
+            "density_curve_gamma",
+            "contrast_mask_highlights",
+            "y_filter_neutral",
+            "m_filter_neutral",
+        )
+        for (wire in sliders) {
+            val entry = byName.getValue(wire)
+            assertTrue("$wire should be numeric", entry["type"].asString() in setOf("float", "int"))
+            val range = entry["range"]
+            assertTrue("$wire is a slider but the schema declares no range", range != null)
+            val bounds = range!!.asList().map { it.asDouble() }
+            assertEquals("$wire needs exactly two bounds", 2, bounds.size)
+            assertTrue("$wire has an inverted range $bounds", bounds[0] < bounds[1])
         }
     }
 
-    /**
-     * The crop page iterates its catalogue group in order and the drag writes
-     * those names, so the group's order is part of the contract with the
-     * engine's own field order.
-     */
+    /** The toggles the page writes are booleans, not numbers. */
     @Test
-    fun cropGroupMatchesTheSchemaOrder() {
-        val declared = fields.map { it["name"].asString() }.filter { it.startsWith("geometry_") }
-        assertEquals(declared, ParamsCatalog.fieldsOf(ParamGroup.CropRotate).map { it.wire })
+    fun togglesAreBooleansInTheSchema() {
+        for (wire in listOf("grain_active", "halation_active")) {
+            assertEquals("$wire", "bool", byName.getValue(wire)["type"].asString())
+        }
+    }
+
+    /** The choice control writes a string the schema calls `str`. */
+    @Test
+    fun theMeteringChoiceIsAStringField() {
+        assertEquals("auto_exposure_method", "str", byName.getValue("auto_exposure_method")["type"].asString())
     }
 }

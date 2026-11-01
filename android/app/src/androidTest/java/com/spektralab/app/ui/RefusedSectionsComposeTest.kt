@@ -3,25 +3,34 @@ package com.spektralab.app.ui
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.spektralab.app.ui.screens.params.ParamsFields
+import com.spektralab.app.ui.screens.params.ParamsScreen
+import com.spektralab.app.ui.screens.params.RefusedSections
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * The unavailable-section notice, drawn for real.
+ * A refused feature, drawn for real.
  *
- * `RefusedSectionsTest` pins which sections exist and what they say; this pins
- * that a person can actually see it. Both are needed: the data test would pass
- * with the composable wired to nothing, and this one would pass with the wrong
- * text.
+ * `RefusedSectionsTest` pins *which* families are refused and what the sentence
+ * says; this pins that a person can see it on the page that would otherwise have
+ * the control — 场景置位 sits in place, disabled, with its reason under it, and
+ * its two handles do nothing.
  *
- * No engine and no photograph are involved — the notice is the one part of the
- * parameter panel that renders on a device where the backend refuses the stage
- * outright, which is exactly the device this app runs on.
+ * It used to compose a `RefusedSections` notice block that the parameter page no
+ * longer has: the replacement draws the refusal inline, on the rows themselves,
+ * which is where the prototype puts them.
+ *
+ * No engine and no photograph are involved — the page renders from a null params
+ * document, which is the state a frame is in before its first reply.
  */
 @RunWith(AndroidJUnit4::class)
 class RefusedSectionsComposeTest {
@@ -29,50 +38,41 @@ class RefusedSectionsComposeTest {
     @get:Rule
     val compose = createComposeRule()
 
-    private val sections = ParamsCatalog.refusedSections(ParamsCatalog.refusedFamilies)
-
     @Test
-    fun everyUnavailableSectionIsOnScreen() {
-        compose.setContent { RefusedSections(sections) }
-
-        for (section in sections) {
-            compose.onNodeWithTag("refused-${section.family}").assertIsDisplayed()
+    fun theRefusedFamilyIsOnThePageAndSaysWhy() {
+        compose.setContent {
+            ParamsScreen(params = null, sourceName = "fixture.png", onDelta = {}, onBack = {})
         }
-    }
 
-    @Test
-    fun theSectionShowsItsTitleAndItsReason() {
-        compose.setContent { RefusedSections(sections) }
+        compose.onNodeWithText(RefusedSections.label("scene_latitude_mapping")).performScrollTo().assertIsDisplayed()
 
-        val edge = sections.first { it.family == "overscan" }
-        compose.onNodeWithText(edge.title).assertIsDisplayed()
-        compose.onNodeWithText(edge.detail).assertIsDisplayed()
-        // ...and the badge that says it is an unavailable capability rather
-        // than a missing control. One per section, hence a count rather than a
-        // single-node lookup.
-        val badges = compose.onAllNodesWithText("本平台不可用", useUnmergedTree = true)
+        // The handles are the refused part, and they are disabled in place.
+        compose.onNodeWithTag("高光回拉-disabled").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("阴影回拉-disabled").assertIsDisplayed()
+
+        // The sentence is on screen, not only in the data.
+        val mentions = compose.onAllNodesWithText("本平台不支持应用", substring = true)
             .fetchSemanticsNodes()
-        check(badges.size == sections.size) {
-            "expected ${sections.size} badges, found ${badges.size}"
+        assertTrue("the page does not say why 场景置位 is off", mentions.isNotEmpty())
+    }
+
+    @Test
+    fun thePageNeverWritesARefusedField() {
+        // The data half and the screen half have to agree: a visible row that
+        // wrote a refused field would be a control the backend cannot honour.
+        val refused = ParamsFields.refusedFamilies.values.flatten().toSet()
+        val written = ParamsFields.leaves.toSet()
+        assertEquals(emptySet<String>(), written intersect refused)
+    }
+
+    @Test
+    fun theOtherFaceOfThePageStillWorks() {
+        // 显影后 must remain reachable: disabling one family is not a reason to
+        // lose the four that work.
+        compose.setContent {
+            ParamsScreen(params = null, sourceName = "fixture.png", onDelta = {}, onBack = {})
         }
-    }
-
-    @Test
-    fun theReasonIsReachableAsAccessibilityTextNotOnlyAsColour() {
-        // A greyed row whose explanation exists only as a colour is not an
-        // explanation. The content description is what makes it one for a
-        // screen reader, and what makes it assertable here.
-        compose.setContent { RefusedSections(sections) }
-
-        val date = sections.first { it.family == "date_imprint" }
-        compose.onNodeWithContentDescription("${date.title}：${date.detail}").assertIsDisplayed()
-    }
-
-    @Test
-    fun anEmptyListDrawsNothing() {
-        // The day the Vulkan port lands, `unsupported_features` will not contain
-        // these families and the panel must gain controls where a notice was.
-        compose.setContent { RefusedSections(emptyList()) }
-        compose.onNodeWithTag("refused-overscan").assertDoesNotExist()
+        compose.onNodeWithTag("params-after").performClick()
+        compose.onNodeWithTag("field-print_exposure").performScrollTo().assertIsDisplayed()
     }
 }

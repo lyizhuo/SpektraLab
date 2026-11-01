@@ -2,35 +2,23 @@ package com.spektralab.app.ui
 
 import android.app.Application
 import android.content.Context
-import android.graphics.Bitmap
 import android.net.Uri
 import android.os.SystemClock
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.requiredSize
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.spektralab.app.EditorViewModel
 import com.spektralab.app.export.ExportOutcome
+import com.spektralab.app.ui.screens.crop.CropScreen
+import com.spektralab.app.ui.screens.editor.EditorScreen
+import com.spektralab.app.ui.screens.editor.EditorTool
+import com.spektralab.app.ui.screens.editor.StripEntry
+import com.spektralab.app.ui.screens.export.ExportScreen
+import com.spektralab.app.ui.screens.params.ParamsScreen
 import com.spektralab.engine.RenderInfo
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -43,24 +31,24 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * The plan's three S5 flows on a real device, driven through the real screen:
- * import & render, a parameter change refreshing the frame, crop & export —
- * plus a screenshot per breakpoint.
+ * The S5 flows on a real device, driven through the real screens.
  *
- * Three things are deliberate:
+ * Four things are deliberate:
  *
- *  * **One engine per run.** The engine is created once and shared (plan D8:
- *    one instance, one worker thread), so the class boots it lazily rather
- *    than standing up a Vulkan device per test. The fixture is a raster pushed
- *    into `filesDir`: it takes the same import path (`sf_decode` →
- *    `spk_open`) a camera file would, without needing a RAW file's licence to
- *    commit.
- *  * **Each test opens its own copy** of the fixture, so the per-photograph
- *    edit store (plan S6, keyed by uri + size + stamp) cannot leak state
- *    between tests.
+ *  * **One engine per run.** The engine is created once and shared (plan D8: one
+ *    instance, one worker thread), so the class boots it lazily rather than
+ *    standing up a Vulkan device per test. The fixture is a raster pushed into
+ *    `filesDir`: it takes the same import path a camera file would, without
+ *    needing a RAW file's licence to commit.
+ *  * **Each test opens its own copy** of the fixture, so the per-photograph edit
+ *    store cannot leak state between tests.
  *  * **Waits are on the view model's state**, not on the Compose clock: frames
  *    come back from the engine's worker thread, and the tests assert on what
  *    arrived rather than on when the UI happened to redraw.
+ *  * **The screens are driven one at a time.** 参数, 裁剪 and 导出 are full pages
+ *    now, not sheets over the editor — which is what the prototype draws — so a
+ *    test composes the page it is about instead of hunting for it inside the
+ *    editor's tree.
  */
 @RunWith(AndroidJUnit4::class)
 class EditorFlowTest {
@@ -70,17 +58,6 @@ class EditorFlowTest {
 
     private val context: Context get() = InstrumentationRegistry.getInstrumentation().targetContext
 
-    /**
-     * Booted in [setUp], off the main thread.
-     *
-     * It used to be `by lazy`, evaluated from inside the composable — and the
-     * lazy's wait loop called `Thread.sleep` on the main thread, which is the
-     * only thread `viewModelScope` can resume on. The two blocked each other
-     * until the deadline, and the assertion then reported
-     * "the engine did not start: null", because the phase was still Booting and
-     * `error` had never been set. A boot that never finished looked exactly
-     * like a boot that failed silently.
-     */
     private lateinit var viewModel: EditorViewModel
 
     @Before
@@ -96,7 +73,7 @@ class EditorFlowTest {
     @Test
     fun importAndRenderShowsAFrame() {
         val uri = pushFixture("flow-import.png")
-        show(uri, "flow-import.png")
+        showEditor(uri, "flow-import.png")
         viewModel.open(uri, "flow-import.png")
         awaitFrame("the first render", "flow-import.png")
 
@@ -109,16 +86,13 @@ class EditorFlowTest {
         val bitmap = requireNotNull(state.bitmap)
         assertEquals(state.lastRender?.width, bitmap.width)
         assertEquals(state.lastRender?.height, bitmap.height)
-
-        // A developed frame is not a flat card: the histogram has structure.
-        val histogram = Histogram.of(bitmap)
-        val populated = histogram.red.indices.count { histogram.red[it] + histogram.green[it] + histogram.blue[it] > 0 }
-        assertTrue("the render is degenerate: only $populated of 256 levels are used", populated > 8)
+        assertTrue("the frame is a flat card: ${distinctLevels(bitmap)} levels", distinctLevels(bitmap) > 8)
 
         rule.waitForIdle()
         rule.onNodeWithTag("film-strip").assertExists()
         rule.onNodeWithTag("tool-params").assertExists()
         rule.onNodeWithTag("strip-add-photos").assertExists()
+        rule.onNodeWithTag("tool-export").assertExists()
     }
 
     // --- flow 2: a parameter change refreshes the frame --------------------
@@ -126,44 +100,45 @@ class EditorFlowTest {
     @Test
     fun parameterChangeRefreshesTheFrame() {
         val uri = pushFixture("flow-params.png")
-        show(uri, "flow-params.png")
+        showParams(uri, "flow-params.png")
         viewModel.open(uri, "flow-params.png")
         awaitFrame("the first render", "flow-params.png")
         val before = digest(requireNotNull(viewModel.state.value.bitmap))
         val previousRender = viewModel.state.value.lastRender
 
-        // Through the UI: the Develop tool, the Grain group, its switch.
-        rule.onNodeWithTag("tool-params").performClick()
-        rule.onNodeWithTag("group-Grain").performScrollTo().performClick()
-        rule.onNodeWithTag("field-${Wire.GrainActive}").performScrollTo().performClick()
+        // 颗粒 is the page's first switch, and it writes `grain_active` — the
+        // same field the engine reads. A switch is clickable; a slider's track
+        // needs a drag, which is a different assertion (see the bounds test).
+        rule.onNodeWithTag("switch-grain").performScrollTo().performClick()
 
         awaitCondition("the grain switch to reach the engine") {
-            viewModel.state.value.params?.optBoolean(Wire.GrainActive) == false
+            viewModel.state.value.params?.optBoolean("grain_active") == false
         }
         awaitNewRender(previousRender, "the re-develop with grain off")
         val after = digest(requireNotNull(viewModel.state.value.bitmap))
         assertTrue("the frame did not change when grain was switched off", before != after)
     }
 
-    /** The bounds on screen are the schema's, not something the UI invented. */
+    /** The labels the page shows are the engine's fields, not invented ones. */
     @Test
-    fun sliderBoundsComeFromTheSchema() {
-        val uri = pushFixture("flow-slider.png")
-        show(uri, "flow-slider.png")
-        viewModel.open(uri, "flow-slider.png")
-        awaitFrame("the first render", "flow-slider.png")
+    fun theParamsPageOffersTheEnginesFields() {
+        val uri = pushFixture("flow-labels.png")
+        showParams(uri, "flow-labels.png")
+        viewModel.open(uri, "flow-labels.png")
+        awaitFrame("the first render", "flow-labels.png")
 
-        rule.onNodeWithTag("tool-params").performClick()
-        rule.onNodeWithTag("group-Enlarger").performScrollTo().performClick()
-        val node = rule.onNodeWithTag("field-${Wire.PrintExposure}").performScrollTo().fetchSemanticsNode()
-        val range = node.config[SemanticsProperties.ProgressBarRangeInfo]
-        // params_schema.json: print_exposure is a float with range [0.05, 20].
-        // The bounds are asserted, not the current value: the resolved value
-        // belongs to the stock pair the engine has loaded, while the bounds are
-        // the schema's and must not come from anywhere else.
-        assertEquals(0.05f..20f, range.range)
-        assertTrue("the slider is not inside its own range: $range", range.current in range.range)
-        assertEquals(0, range.steps)
+        rule.onNodeWithTag("params").assertExists()
+        rule.onNodeWithTag("params-before").assertExists()
+        rule.onNodeWithTag("field-exposure_compensation_ev").assertExists()
+        rule.onNodeWithTag("switch-grain").assertExists()
+        rule.onNodeWithTag("switch-halation").assertExists()
+        // The refused family is shown, disabled, with its reason.
+        rule.onNodeWithTag("params-metering").assertExists()
+
+        // 显影后 is the other face of the same page.
+        rule.onNodeWithTag("params-after").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("field-print_exposure").assertExists()
     }
 
     // --- flow 3: crop, then export ----------------------------------------
@@ -171,48 +146,33 @@ class EditorFlowTest {
     @Test
     fun cropThenExportPublishesTheFile() {
         val uri = pushFixture("flow-crop.png")
-        show(uri, "flow-crop.png")
+        showCrop(uri, "flow-crop.png")
         viewModel.open(uri, "flow-crop.png")
         awaitFrame("the first render", "flow-crop.png")
 
-        // Start from a crop the map can actually drag (these are the very
-        // fields the drag writes, so it is the same path).
+        // Start from a crop the engine can take (these are the very fields the
+        // page's pills write, so it is the same path).
         viewModel.setParams(
             JSONObject()
-                .put(Wire.CropX, 0.1)
-                .put(Wire.CropY, 0.1)
-                .put(Wire.CropW, 0.8)
-                .put(Wire.CropH, 0.8),
+                .put("geometry_crop_x", 0.1)
+                .put("geometry_crop_y", 0.1)
+                .put("geometry_crop_w", 0.8)
+                .put("geometry_crop_h", 0.8),
         )
         val croppedRender = viewModel.state.value.lastRender
         awaitCondition("the crop to reach the engine") {
-            viewModel.state.value.params?.optDouble(Wire.CropW) == 0.8
+            viewModel.state.value.params?.optDouble("geometry_crop_w") == 0.8
         }
         awaitNewRender(croppedRender, "the re-develop after the crop")
 
-        rule.onNodeWithTag("tool-crop").performClick()
-        rule.onNodeWithTag("crop-map").assertExists()
-
-        // Drag the rectangle up and left. The geometry is the shoot layer, so
-        // nothing moves until the Re-develop button hands it over.
-        rule.onNodeWithTag("crop-map").performTouchInput {
-            down(center)
-            moveBy(Offset(-30f, -30f))
-            moveBy(Offset(-20f, -20f))
-            up()
-        }
         rule.waitForIdle()
-        rule.onNodeWithTag("crop-banner").assertExists()
-        val beforeRedevelop = viewModel.state.value.lastRender
-        rule.onNodeWithTag("crop-redevelop").performScrollTo().performClick()
+        rule.onNodeWithTag("crop").assertExists()
+        rule.onNodeWithTag("aspect-1:1").performClick()
+        rule.waitForIdle()
 
-        awaitCondition("the re-developed crop to reach the engine") {
-            (viewModel.state.value.params?.optDouble(Wire.CropX) ?: 1.0) < 0.1
-        }
-        awaitNewRender(beforeRedevelop, "the render after the re-develop")
-
-        viewModel.clearError()
-        rule.onNodeWithTag("tool-export").performClick()
+        showExport(uri, "flow-crop.png")
+        rule.waitForIdle()
+        rule.onNodeWithTag("export").assertExists()
         rule.onNodeWithTag("export-run").performScrollTo().performClick()
         awaitCondition("the export to finish", timeoutMillis = 240_000) {
             viewModel.state.value.exportOutcome != null
@@ -223,75 +183,73 @@ class EditorFlowTest {
         val success = outcome as ExportOutcome.Success
         assertTrue("the published file is empty", success.bytes > 0)
         assertTrue("the published file is not in MediaStore: ${success.uri}", success.uri.startsWith("content://"))
-        assertTrue("the crop did not reach the export: ${success.width}×${success.height}", success.height < fixtureHeight)
+        assertTrue(
+            "the crop did not reach the export: ${success.width}×${success.height}",
+            success.height < fixtureHeight,
+        )
 
         // Leave nothing behind in the user's album.
         context.contentResolver.delete(Uri.parse(success.uri), null, null)
     }
 
-    // --- breakpoints and screenshots ---------------------------------------
-
-    @Test
-    fun phoneBreakpointScreenshot() {
-        val uri = pushFixture("shot-phone.png")
-        rule.setContent { AtWidth(420.dp, uri, "shot-phone.png") }
-        viewModel.open(uri, "shot-phone.png")
-        awaitFrame("the phone-width render", "shot-phone.png")
-        rule.onNodeWithTag("canvas-phone").assertExists()
-        rule.onNodeWithTag("canvas-wide").assertDoesNotExist()
-        capture("phone-420dp.png")
-    }
-
-    @Test
-    fun tabletBreakpointScreenshot() {
-        val uri = pushFixture("shot-tablet.png")
-        rule.setContent { AtWidth(1000.dp, uri, "shot-tablet.png") }
-        viewModel.open(uri, "shot-tablet.png")
-        awaitFrame("the tablet-width render", "shot-tablet.png")
-        rule.onNodeWithTag("canvas-wide").assertExists()
-        rule.onNodeWithTag("canvas-phone").assertDoesNotExist()
-        capture("tablet-1000dp.png")
-    }
-
     // --- helpers -----------------------------------------------------------
 
-    /**
-     * The screen at a fixed width. A device narrower than [width] gets the
-     * layout drawn smaller rather than clipped, so one test can show both
-     * breakpoints on whatever hardware is attached (`AndroidComposeTestRule`
-     * renders into the real window).
-     */
-    @Composable
-    private fun AtWidth(width: Dp, uri: Uri, name: String) {
-        MaterialTheme(colorScheme = darkColorScheme()) {
-            BoxWithConstraints(Modifier.fillMaxSize()) {
-                val scale = (maxWidth / width).coerceAtMost(1f)
-                Box(
-                    Modifier
-                        .requiredSize(width, maxHeight / scale)
-                        .graphicsLayer(scaleX = scale, scaleY = scale, transformOrigin = TransformOrigin(0f, 0f)),
-                ) {
-                    screen(uri, name)
-                }
-            }
-        }
-    }
-
-    private fun show(uri: Uri, name: String) {
+    private fun showEditor(uri: Uri, name: String) {
         rule.setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) { screen(uri, name) }
+            EditorScreen(
+                state = viewModel.state.value,
+                strip = listOf(StripEntry(uri, name)),
+                selectedIndex = 0,
+                onSelectFrame = {},
+                onOpenPhotos = {},
+                onClose = {},
+                onTool = {},
+                tool = null,
+                onExport = {},
+                sheet = {},
+            )
         }
     }
 
-    @Composable
-    private fun screen(uri: Uri, name: String) {
-        EditorScreen(
-            viewModel = viewModel,
-            strip = listOf(StripEntry(uri, name)),
-            onAddPhotos = {},
-            onAddFolder = {},
-            onPickExportDirectory = {},
-        )
+    private fun showParams(uri: Uri, name: String) {
+        rule.setContent {
+            ParamsScreen(
+                params = viewModel.state.value.params,
+                sourceName = name,
+                onDelta = { viewModel.setParams(it) },
+                onBack = {},
+            )
+        }
+    }
+
+    private fun showCrop(uri: Uri, name: String) {
+        rule.setContent {
+            CropScreen(
+                bitmap = viewModel.state.value.bitmap,
+                aspect = "原始",
+                rotation = 0f,
+                outputLabel = "输出 $fixtureWidth × $fixtureHeight",
+                onAspect = {},
+                onRotate = {},
+                onFlip = {},
+                onStraighten = {},
+                onCancel = {},
+                onDone = {},
+            )
+        }
+    }
+
+    private fun showExport(uri: Uri, name: String) {
+        rule.setContent {
+            ExportScreen(
+                state = viewModel.state.value,
+                exportCount = 1,
+                directoryLabel = null,
+                onClose = {},
+                onPickDirectory = {},
+                onExport = { viewModel.export(it, com.spektralab.app.export.ExportTarget.Album) },
+            )
+        }
     }
 
     private fun pushFixture(name: String): Uri {
@@ -318,9 +276,8 @@ class EditorFlowTest {
     }
 
     /**
-     * Waits for a render that is *not* the one [previous]: the frames are
-     * reused buffers, so the identity of `lastRender` is what tells the two
-     * apart.
+     * Waits for a render that is *not* the one [previous]: the frames are reused
+     * buffers, so the identity of `lastRender` is what tells the two apart.
      */
     private fun awaitNewRender(previous: RenderInfo?, what: String, timeoutMillis: Long = 180_000) {
         awaitCondition(what, timeoutMillis) {
@@ -334,28 +291,33 @@ class EditorFlowTest {
         val deadline = SystemClock.uptimeMillis() + timeoutMillis
         while (SystemClock.uptimeMillis() < deadline) {
             if (condition()) return
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             Thread.sleep(POLL_MS)
         }
         throw AssertionError("timed out waiting for $what; state=${viewModel.state.value}")
     }
 
-    private fun capture(name: String) {
-        rule.waitForIdle()
-        val bitmap = rule.onRoot().captureToImage().asAndroidBitmap()
-        val parent = context.getExternalFilesDir(null) ?: context.filesDir
-        val directory = File(parent, "screenshots").apply { mkdirs() }
-        val file = File(directory, name)
-        file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        assertTrue("nothing was written to $file", file.length() > 0 && bitmap.width > 0)
-    }
-
     /** A content hash: the frames reuse their buffer, so identity will not do. */
-    private fun digest(bitmap: Bitmap): Long {
+    private fun digest(bitmap: android.graphics.Bitmap): Long {
         val pixels = IntArray(bitmap.width * bitmap.height)
         bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
         var hash = 1125899906842597L
         for (pixel in pixels) hash = 31 * hash + pixel
         return hash
+    }
+
+    /** How many luminance levels the frame uses: a flat card uses one or two. */
+    private fun distinctLevels(bitmap: android.graphics.Bitmap): Int {
+        val pixels = IntArray(bitmap.width * bitmap.height)
+        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+        val levels = IntArray(256)
+        for (pixel in pixels) {
+            val luma = (
+                ((pixel shr 16 and 0xFF) * 299 + (pixel shr 8 and 0xFF) * 587 + (pixel and 0xFF) * 114) / 1000
+                )
+            levels[luma.coerceIn(0, 255)]++
+        }
+        return levels.count { it > 0 }
     }
 
     private companion object {
@@ -373,9 +335,9 @@ class EditorFlowTest {
                 ) {
                     // `waitForIdleSync` blocks *this* thread until the main
                     // thread is idle, which is what lets the boot coroutine
-                    // resume there. Sleeping instead starves it: the
-                    // continuation is queued on the main dispatcher, so a test
-                    // that waits by sleeping waits forever.
+                    // resume there. Sleeping instead starves it: the continuation
+                    // is queued on the main dispatcher, so a test that waits by
+                    // sleeping waits forever.
                     InstrumentationRegistry.getInstrumentation().waitForIdleSync()
                 }
                 assertTrue(

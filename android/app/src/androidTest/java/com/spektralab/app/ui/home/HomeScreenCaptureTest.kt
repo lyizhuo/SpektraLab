@@ -15,6 +15,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.spektralab.app.rolls.Roll
+import com.spektralab.app.ui.screens.home.HomeScreen
 import com.spektralab.app.ui.theme.Tokens
 import org.junit.Assert.assertTrue
 import org.junit.Rule
