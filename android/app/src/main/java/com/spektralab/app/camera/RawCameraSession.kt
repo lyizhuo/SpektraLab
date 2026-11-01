@@ -181,6 +181,26 @@ class RawCameraSession(
         if (session != null && device != null) startPreview()
     }
 
+    /**
+     * The EV dial's setting, in the camera's own integer steps.
+     *
+     * The prototype shows a floating EV reel beside the viewfinder, and this is
+     * the field behind it: `CONTROL_AE_EXPOSURE_COMPENSATION` is an index, not a
+     * number of stops -- `CONTROL_AE_COMPENSATION_STEP` says what a step is on
+     * this device, and `CONTROL_AE_COMPENSATION_RANGE` how far it goes. The
+     * screen converts; the session just applies whatever index it is given.
+     */
+    @Volatile
+    var exposureCompensation: Int = 0
+        private set
+
+    /** Apply an EV index to the running preview, restarting the repeat. */
+    fun setExposureCompensation(steps: Int) {
+        if (steps == exposureCompensation) return
+        exposureCompensation = steps
+        startPreview()
+    }
+
     /** Repeating request for the viewfinder, and the readout it implies. */
     private fun startPreview() {
         val d = device ?: return
@@ -190,6 +210,7 @@ class RawCameraSession(
             addTarget(target)
             set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
             set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposureCompensation)
             set(
                 CaptureRequest.FLASH_MODE,
                 if (torchOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF,
@@ -230,6 +251,7 @@ class RawCameraSession(
         pending = PendingCapture(dest, cont)
         try {
             val req = d.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+                set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposureCompensation)
                 addTarget(r.surface)
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
@@ -372,6 +394,39 @@ class RawCameraSession(
                     ?: Size(4000, 3000)
             } catch (e: Exception) {
                 Size(4000, 3000)
+            }
+        }
+
+        /**
+         * How far this camera can compensate, in EV steps of [evStep].
+         *
+         * C3 draws the reel as a continuous ±offset, but the camera only takes
+         * whole indices and its ends differ per device (phones commonly offer
+         * ±2 or ±3 EV). Asking the characteristics is what keeps the reel's ends
+         * honest instead of printing a range the hardware does not have.
+         */
+        fun evIndexRange(context: Context, lens: LensSpec?): IntRange {
+            if (lens == null) return -4..4
+            return try {
+                val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                val range = manager.getCameraCharacteristics(lens.cameraId)
+                    .get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+                if (range == null) -4..4 else range.lower..range.upper
+            } catch (e: Exception) {
+                -4..4
+            }
+        }
+
+        /** What one index of that range is worth, in stops. */
+        fun evStep(context: Context, lens: LensSpec?): Float {
+            if (lens == null) return 0.5f
+            return try {
+                val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                val step = manager.getCameraCharacteristics(lens.cameraId)
+                    .get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
+                step?.toFloat() ?: 0.5f
+            } catch (e: Exception) {
+                0.5f
             }
         }
 

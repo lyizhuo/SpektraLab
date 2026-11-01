@@ -10,6 +10,7 @@ import android.os.Build
 import android.content.pm.PackageManager
 import android.Manifest
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
@@ -20,6 +21,7 @@ import com.spektralab.app.rolls.Roll
 import com.spektralab.app.rolls.RollStore
 import com.spektralab.app.ui.screens.home.HomeScreen
 import com.spektralab.app.ui.screens.home.RecentFrame
+import com.spektralab.app.ui.screens.picker.PhotoPickerScreen
 import com.spektralab.app.ui.theme.SpektraLabTheme
 import com.spektralab.app.ui.theme.SpektraLabTheme
 import com.spektralab.app.ui.theme.SpektraLabTheme
@@ -67,6 +69,9 @@ class HomeActivity : ComponentActivity() {
     /** C1's 多选 state; empty means the grid opens instead of selecting. */
     private var selection by mutableStateOf<Set<Int>>(emptySet())
 
+    /** B2, the picker the prototype draws; the system picker stays for files. */
+    private var pickerOpen by mutableStateOf(false)
+
     /** API 33 renamed the gallery permission; below it the old one applies. */
     private val mediaPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -81,6 +86,31 @@ class HomeActivity : ComponentActivity() {
         askForGallery()
         setContent {
             SpektraLabTheme {
+                BackHandler(enabled = pickerOpen) { pickerOpen = false }
+
+                if (pickerOpen) {
+                    Box(Modifier.fillMaxSize().background(Tokens.Ground)) {
+                        PhotoPickerScreen(
+                            onCancel = { pickerOpen = false },
+                            onImport = { frames ->
+                                pickerOpen = false
+                                if (frames.isNotEmpty()) {
+                                    startActivity(
+                                        Intent(this@HomeActivity, MainActivity::class.java).apply {
+                                            putStringArrayListExtra(
+                                                MainActivity.EXTRA_IMPORT,
+                                                ArrayList(frames.map { it.uri.toString() }),
+                                            )
+                                            putExtra(MainActivity.EXTRA_OPEN_URI, frames.first().uri)
+                                            data = frames.first().uri
+                                        },
+                                    )
+                                }
+                            },
+                        )
+                    }
+                    return@SpektraLabTheme
+                }
                 Surface(modifier = Modifier.fillMaxSize(), color = Tokens.Ground) {
                     Box(Modifier.fillMaxSize().background(Tokens.Ground)) {
                         HomeScreen(
@@ -93,7 +123,7 @@ class HomeActivity : ComponentActivity() {
                                 if (rolls.current()?.id != roll.id) rolls.save(roll)
                                 startActivity(CameraActivity.intent(this@HomeActivity))
                             },
-                            onPickAlbum = { pickImage.launch(arrayOf("image/*", "application/octet-stream")) },
+                            onPickAlbum = { pickerOpen = true },
                             onCamera = { startActivity(CameraActivity.intent(this@HomeActivity)) },
                             onOpenRecent = { frame -> openInEditor(frame.uri) },
                             selection = selection,

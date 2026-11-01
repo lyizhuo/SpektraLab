@@ -79,6 +79,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.sp
+import com.spektralab.app.R
+import com.spektralab.app.ui.theme.Tokens
+import kotlin.math.roundToInt
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.geometry.Offset
 
 /**
  * C3 — the camera.
@@ -125,6 +136,15 @@ fun CameraScreen(
     var openSession by remember { mutableStateOf<RawCameraSession?>(null) }
     var readout by remember { mutableStateOf(ExposureReadout.UNKNOWN) }
     var torchOn by remember { mutableStateOf(false) }
+
+    /** C3's EV reel: the index the camera is set to, and what a step is worth. */
+    var evIndex by remember { mutableStateOf(0) }
+    val evRange = remember(inventory, selectedStop) {
+        RawCameraSession.evIndexRange(context, selectedStop.lens)
+    }
+    val evStep = remember(inventory, selectedStop) {
+        RawCameraSession.evStep(context, selectedStop.lens)
+    }
 
     // The readout lives in the session and changes on every frame; the
     // screen has to ask for it. A state read inside `AndroidView.update`
@@ -202,68 +222,98 @@ fun CameraScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.safeDrawing)
-                .padding(horizontal = 16.dp),
+                .windowInsetsPadding(WindowInsets.safeDrawing),
         ) {
-        TopControls(
-            filmLabel = filmLabel,
-            onClose = onClose,
-            torchOn = torchOn,
-            onToggleTorch = {
-                torchOn = !torchOn
-                openSession?.setTorch(torchOn)
-            },
-        )
-            ReadoutRow(readout = readout)
-            CompositionGuides(
+            TopBar(
+                filmLabel = filmLabel,
+                onClose = onClose,
+                torchOn = torchOn,
+                onToggleTorch = {
+                    torchOn = !torchOn
+                    openSession?.setTorch(torchOn)
+                },
+            )
+
+            // The viewfinder's furniture lives on the picture, not in the
+            // column: the grid, the reticle and the EV reel belong to the frame
+            // that is being composed, and holding them in a nested layout kept
+            // them inside the letterbox instead of over the sensor's image.
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                CompositionGuides(Modifier.fillMaxSize())
+                FocusReticle(Modifier.align(Alignment.Center))
+                EvDial(
+                    ev = evIndex * evStep,
+                    range = evRange.first * evStep..evRange.last * evStep,
+                    onChange = { ev ->
+                        val steps = (ev / evStep).roundToInt().coerceIn(evRange.first, evRange.last)
+                        evIndex = steps
+                        openSession?.setExposureCompensation(steps)
+                    },
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 16.dp, top = 40.dp),
+                )
+                if (notice != null) {
+                    Text(
+                        text = notice,
+                        style = Tokens.Type.Caption,
+                        color = Tokens.Accent,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 10.dp)
+                            .testTag("camera-notice"),
+                    )
+                }
+            }
+
+            Column(
                 Modifier
                     .fillMaxWidth()
-                    .weight(1f)
-                    .padding(top = 8.dp),
-            )
-            if (notice != null) {
-                Text(
-                    text = notice,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp)
-                        .testTag("camera-notice"),
-                )
-            }
-            LensPicker(
-                stops = stops,
-                selected = selectedStop,
-                onSelect = { selectedStop = it },
-                modifier = Modifier.align(Alignment.CenterHorizontally),
-            )
-            Spacer(Modifier.height(10.dp))
-            RollLine(filmLabel = filmLabel, frameIndex = frameIndex, frameCapacity = frameCapacity, mode = mode)
-            Spacer(Modifier.height(12.dp))
-            BottomControls(
-                count = frameIndex,
-                enabled = mode != null && !busy,
-                onCapture = {
-                    val session = openSession ?: return@BottomControls
-                    busy = true
-                    errorLine = null
-                    scope.launch {
-                        val dest = File(captureDirectory, "SPK_${System.currentTimeMillis()}.dng")
-                        try {
-                            val bytes = withContext(Dispatchers.IO) { session.capture(dest) }
-                            if (bytes > 0) onCaptured(dest, readout.summary()) else errorLine = "写入失败"
-                        } catch (failure: Exception) {
-                            errorLine = failure.message ?: "拍摄失败"
-                        } finally {
-                            busy = false
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            0.35f to Color(0xB3000000),
+                            1f to Color(0xE6000000),
+                        ),
+                    )
+                    .padding(horizontal = 16.dp),
+            ) {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    LensPicker(
+                        stops = stops,
+                        selected = selectedStop,
+                        onSelect = { selectedStop = it },
+                    )
+                }
+                Spacer(Modifier.height(14.dp))
+                ExposureLine(readout = readout)
+                Spacer(Modifier.height(10.dp))
+                RollLine(filmLabel = filmLabel, frameIndex = frameIndex, frameCapacity = frameCapacity, mode = mode)
+                Spacer(Modifier.height(14.dp))
+                BottomControls(
+                    count = frameIndex,
+                    enabled = mode != null && !busy,
+                    onCapture = {
+                        val session = openSession ?: return@BottomControls
+                        busy = true
+                        errorLine = null
+                        scope.launch {
+                            val dest = File(captureDirectory, "SPK_${System.currentTimeMillis()}.dng")
+                            try {
+                                val bytes = withContext(Dispatchers.IO) { session.capture(dest) }
+                                if (bytes > 0) onCaptured(dest, readout.summary()) else errorLine = "写入失败"
+                            } catch (failure: Exception) {
+                                errorLine = failure.message ?: "拍摄失败"
+                            } finally {
+                                busy = false
+                            }
                         }
-                    }
-                },
+                    },
                     onOpenLast = onOpenLast,
-                onFlip = { /* the plan's second lens, not a mirror flip */ },
-            )
-            Spacer(Modifier.height(8.dp))
+                    onFlip = { /* the plan's second lens, not a mirror flip */ },
+                )
+                Spacer(Modifier.height(10.dp))
+            }
         }
     }
 }
@@ -383,93 +433,176 @@ private fun Viewfinder(
 }
 
 @Composable
-private fun TopControls(
+private fun TopBar(
     filmLabel: String,
     onClose: () -> Unit,
     torchOn: Boolean,
     onToggleTorch: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(top = 8.dp),
+        Modifier.fillMaxWidth().padding(top = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        ScrimIconButton(onClick = onClose, tag = "camera-close") {
-            Icon(Icons.Outlined.Close, contentDescription = "关闭", modifier = Modifier.size(18.dp))
-        }
-        Surface(
-            shape = RoundedCornerShape(50),
-            color = Color(0x61000000),
-            modifier = Modifier.weight(1f).testTag("camera-film"),
-        ) {
-            Column(
-                Modifier.padding(vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    text = filmLabel,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                    text = "135 · 36 EXP",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.secondary,
-                )
-            }
-        }
-        ScrimIconButton(
-            onClick = onToggleTorch,
-            tag = "camera-flash",
-        ) {
+        RoundChromeButton(onClick = onClose, tag = "camera-close") {
             Icon(
-                if (torchOn) Icons.Outlined.FlashOn else Icons.Outlined.FlashOff,
+                painter = painterResource(R.drawable.ic_x),
+                contentDescription = "关闭",
+                tint = Color.White,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        // The stock, as a pill rather than a heading: C3's own shape, 140 × 38
+        // with the amber border and the two-line label inside it.
+        Column(
+            Modifier
+                .width(140.dp)
+                .height(38.dp)
+                .clip(RoundedCornerShape(19.dp))
+                .background(Color(0x4D000000))
+                .border(1.dp, Tokens.AccentBorder, RoundedCornerShape(19.dp))
+                .testTag("camera-film"),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(filmLabel, style = Tokens.Type.PillLabel.copy(fontSize = 10.sp), color = Tokens.Accent)
+            Text(
+                text = "135 · 36 EXP",
+                style = Tokens.Type.Caption.copy(fontSize = 7.5.sp, fontFamily = Tokens.Mono),
+                color = Tokens.Accent.copy(alpha = 0.75f),
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        RoundChromeButton(onClick = onToggleTorch, tag = "camera-flash") {
+            Icon(
+                painter = painterResource(R.drawable.ic_zap),
                 contentDescription = "闪光灯",
-                tint = if (torchOn) MaterialTheme.colorScheme.primary else Color.White,
-                modifier = Modifier.size(18.dp),
+                tint = if (torchOn) Tokens.Accent else Color.White,
+                modifier = Modifier.size(16.dp),
             )
         }
     }
+    Box(Modifier.fillMaxWidth().padding(top = 8.dp), contentAlignment = Alignment.Center) {
+        Text(
+            text = "│ 01 │",
+            style = Tokens.Type.Caption.copy(fontSize = 8.5.sp, fontFamily = Tokens.Mono),
+            color = Tokens.Accent,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(Tokens.AccentGhost)
+                .border(1.dp, Tokens.AccentBorder, RoundedCornerShape(8.dp))
+                .padding(horizontal = 8.dp, vertical = 2.dp)
+                .testTag("camera-frame-chip"),
+        )
+    }
 }
 
+/** 38 dp circle with a hairline: C3's close and flash buttons. */
 @Composable
-private fun ReadoutRow(readout: ExposureReadout) {
-    Row(
-        Modifier.fillMaxWidth().padding(top = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+private fun RoundChromeButton(onClick: () -> Unit, tag: String, content: @Composable () -> Unit) {
+    Box(
+        Modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .background(Color(0x59000000))
+            .border(1.dp, Color(0x33FFFFFF), CircleShape)
+            .clickable(onClick = onClick)
+            .testTag(tag),
+        contentAlignment = Alignment.Center,
+    ) { content() }
+}
+
+/**
+ * The exposure reel on the left: EV over a vertical track with a knob.
+ *
+ * C3 puts it at the left edge, half way down the viewfinder, because that is
+ * where a thumb reaches when the phone is held one-handed. A drag on the track
+ * writes `camera.exposure_compensation_ev`; the number under it is the same
+ * value the engine will use.
+ */
+@Composable
+private fun EvDial(
+    ev: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val span = range.endInclusive - range.start
+    val fraction = if (span <= 0f) 0.5f else ((ev - range.start) / span).coerceIn(0f, 1f)
+    Column(
+        modifier
+            .width(42.dp)
+            .height(126.dp)
+            .clip(RoundedCornerShape(21.dp))
+            .background(Color(0x66000000))
+            .border(1.dp, Color(0x26FFFFFF), RoundedCornerShape(21.dp))
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        Text("EV", style = Tokens.Type.Caption.copy(fontSize = 7.5.sp, fontFamily = Tokens.Mono), color = Color.White.copy(alpha = 0.75f))
+        Spacer(Modifier.height(6.dp))
+        Box(
+            Modifier
+                .width(20.dp)
+                .weight(1f)
+                .pointerInput(range) {
+                    detectDragGestures { change, _ ->
+                        val usable = size.height.coerceAtLeast(1)
+                        val at = (1f - (change.position.y / usable)).coerceIn(0f, 1f)
+                        onChange(range.start + at * span)
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(Modifier.width(2.dp).height(60.dp).background(Color(0x4DFFFFFF)))
+            Box(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .offset(y = (60.dp * (1f - fraction)) - 4.dp)
+                    .size(9.dp)
+                    .clip(CircleShape)
+                    .background(Tokens.Accent),
+            )
+        }
+        Spacer(Modifier.height(6.dp))
         Text(
-            text = listOf(readout.isoLabel, "AUTO").filter { it.isNotEmpty() }.joinToString(" · "),
-            style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
-            color = Color.White.copy(alpha = 0.9f),
-        )
-        Text(
-            text = listOf(readout.shutterLabel, readout.apertureLabel)
-                .filter { it.isNotEmpty() }
-                .joinToString(" "),
-            style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
-            color = Color.White.copy(alpha = 0.9f),
-        )
-    }
-}
-
-@Composable
-private fun RollLine(filmLabel: String, frameIndex: Int, frameCapacity: Int, mode: CaptureMode?) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(
-            text = "$filmLabel · 135",
-            style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Text(
-            text = "$frameIndex / $frameCapacity",
-            style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+            text = if (ev > 0f) "+${String.format("%.1f", ev)}" else String.format("%.1f", ev),
+            style = Tokens.Type.Caption.copy(fontSize = 8.5.sp, fontFamily = Tokens.Mono),
             color = Color.White,
-            modifier = Modifier.testTag("camera-counter"),
         )
     }
 }
 
+/** The focus reticle: four amber brackets around the middle of the frame. */
+@Composable
+private fun FocusReticle(modifier: Modifier = Modifier) {
+    Box(modifier.size(56.dp)) {
+        androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+            val arm = 12.dp.toPx()
+            val stroke = 2.dp.toPx()
+            val color = Tokens.Accent
+            fun bracket(x: Float, y: Float, dx: Float, dy: Float) {
+                drawLine(color, Offset(x, y), Offset(x + dx, y), stroke)
+                drawLine(color, Offset(x, y), Offset(x, y + dy), stroke)
+            }
+            bracket(0f, 0f, arm, arm)
+            bracket(size.width, 0f, -arm, arm)
+            bracket(0f, size.height, arm, -arm)
+            bracket(size.width, size.height, -arm, -arm)
+        }
+        Box(
+            Modifier.align(Alignment.Center).size(5.dp).clip(CircleShape).background(Tokens.Accent),
+        )
+    }
+}
+
+/**
+ * The lens row: 0.7 / 1× / 2 inside one 140 × 41 pill.
+ *
+ * C3 draws the three stops as one control with the chosen one filled, not as
+ * three separate buttons: the lens is a single choice, and a segmented control
+ * that reads as three buttons invites the belief that all three can be on.
+ */
 @Composable
 private fun LensPicker(
     stops: List<ZoomStop>,
@@ -479,32 +612,82 @@ private fun LensPicker(
 ) {
     val shown = stops.take(3)
     if (shown.isEmpty()) return
-    val index = shown.indexOfFirst { it.ratio == selected.ratio }.coerceAtLeast(0)
-    SingleChoiceSegmentedButtonRow(modifier.width(220.dp)) {
-        shown.forEachIndexed { i, stop ->
-            SegmentedButton(
-                selected = i == index,
-                onClick = { onSelect(stop) },
-                shape = SegmentedButtonDefaults.itemShape(index = i, count = shown.size),
-                colors = SegmentedButtonDefaults.colors(
-                    activeContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-                    activeContentColor = MaterialTheme.colorScheme.onPrimary,
-                    inactiveContainerColor = Color(0x57000000),
-                    inactiveContentColor = Color.White,
-                ),
-                modifier = Modifier.testTag("lens-${stop.ratio}"),
-                label = {
-                    Text(
-                        text = zoomLabel(stop.ratio),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                },
-            )
+    Row(
+        modifier
+            .width(140.dp)
+            .height(41.dp)
+            .clip(RoundedCornerShape(20.5.dp))
+            .background(Color(0x66000000))
+            .border(1.dp, Color(0x26FFFFFF), RoundedCornerShape(20.5.dp))
+            .padding(2.dp),
+    ) {
+        shown.forEach { stop ->
+            val here = stop.ratio == selected.ratio
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(18.5.dp))
+                    .background(if (here) Tokens.Accent else Color.Transparent)
+                    .clickable { onSelect(stop) }
+                    .testTag("lens-${stop.ratio}"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = zoomLabel(stop.ratio),
+                    style = Tokens.Type.Caption.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                    color = if (here) Tokens.OnAccent else Color.White,
+                )
+            }
         }
     }
 }
 
+/** `AUTO · ISO 400` and `1/125 F4.0`, the two ends of the exposure line. */
+@Composable
+private fun ExposureLine(readout: ExposureReadout) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(
+            text = "AUTO · ${readout.isoLabel.ifEmpty { "ISO —" }}",
+            style = Tokens.Type.Value,
+            color = Color.White.copy(alpha = 0.92f),
+        )
+        Text(
+            text = listOf(readout.shutterLabel, readout.apertureLabel)
+                .filter { it.isNotEmpty() }
+                .joinToString(" ")
+                .ifEmpty { "—" },
+            style = Tokens.Type.Value,
+            color = Color.White.copy(alpha = 0.92f),
+        )
+    }
+}
+
+/** The roll's own line: stock and format on the left, the counter on the right. */
+@Composable
+private fun RollLine(filmLabel: String, frameIndex: Int, frameCapacity: Int, mode: CaptureMode?) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(
+            text = "$filmLabel · 135",
+            style = Tokens.Type.Caption.copy(fontSize = 8.5.sp, fontFamily = Tokens.Mono),
+            color = Tokens.Accent,
+        )
+        Text(
+            text = "$frameIndex / $frameCapacity",
+            style = Tokens.Type.Caption.copy(fontSize = 8.5.sp, fontFamily = Tokens.Mono),
+            color = Color.White,
+            modifier = Modifier.testTag("camera-counter"),
+        )
+    }
+}
+
+/**
+ * The shutter: a 79 dp white disc with an amber centre, flanked by the last
+ * frame and the lens flip.
+ *
+ * The amber centre is the frame's own — it is the same safelight the product
+ * uses everywhere, and it is what makes the shutter read as this camera's.
+ */
 @Composable
 private fun BottomControls(
     count: Int,
@@ -518,63 +701,58 @@ private fun BottomControls(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Surface(
-            onClick = onOpenLast,
-            shape = RoundedCornerShape(12.dp),
-            color = Color(0xFF241D18),
-            modifier = Modifier.size(54.dp).testTag("camera-thumb"),
+        Box(
+            Modifier
+                .size(54.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0x33FFFFFF))
+                .border(1.dp, Color(0x26FFFFFF), RoundedCornerShape(10.dp))
+                .clickable(onClick = onOpenLast)
+                .testTag("camera-thumb"),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(contentAlignment = Alignment.BottomEnd) {
-                Text(
-                    text = count.toString(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White,
-                    modifier = Modifier.padding(6.dp),
-                )
-            }
+            Text(
+                text = count.toString(),
+                style = Tokens.Type.Caption.copy(fontSize = 8.sp, fontFamily = Tokens.Mono),
+                color = Color.White,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 4.dp),
+            )
         }
 
-        FilledIconButton(
-            onClick = onCapture,
-            enabled = enabled,
-            shape = CircleShape,
-            colors = IconButtonDefaults.filledIconButtonColors(
-                containerColor = Color(0xFFF5F1EA),
-                contentColor = Color(0xFF100E0C),
-                disabledContainerColor = Color(0x59F5F1EA),
-                disabledContentColor = Color(0x8A100E0C),
-            ),
-            modifier = Modifier.size(76.dp).testTag("camera-shutter"),
+        Box(
+            Modifier
+                .size(79.dp)
+                .clip(CircleShape)
+                .background(Color(0x1AFFFFFF))
+                .border(3.dp, Color(0xF2FFFFFF), CircleShape)
+                .clickable(enabled = enabled, onClick = onCapture)
+                .testTag("camera-shutter"),
+            contentAlignment = Alignment.Center,
         ) {
+            Box(Modifier.size(71.dp).clip(CircleShape).background(Color(0xF2F5F1EA)))
             Box(
                 Modifier
-                    .size(58.dp)
+                    .size(9.dp)
                     .clip(CircleShape)
-                    .background(if (enabled) Color(0xFFF5F1EA) else Color(0x8AF5F1EA)),
+                    .background(if (enabled) Tokens.Accent else Tokens.InkTertiary),
             )
         }
 
-        ScrimIconButton(onClick = onFlip, tag = "camera-flip") {
+        RoundChromeButton(onClick = onFlip, tag = "camera-flip") {
             Icon(
-                Icons.Outlined.FlipCameraAndroid,
+                painter = painterResource(R.drawable.ic_flip_camera),
                 contentDescription = "切换镜头",
-                modifier = Modifier.size(20.dp),
+                tint = Color.White,
+                modifier = Modifier.size(18.dp),
             )
         }
     }
 }
 
-@Composable
-private fun ScrimIconButton(onClick: () -> Unit, tag: String, content: @Composable () -> Unit) {
-    Surface(shape = CircleShape, color = Color(0x57000000), modifier = Modifier.size(44.dp)) {
-        IconButton(onClick = onClick, modifier = Modifier.testTag(tag)) { content() }
-    }
-}
-
-/** Thirds, drawn in the band between the readouts and the controls. */
+/** Thirds, drawn across the whole viewfinder. */
 @Composable
 private fun CompositionGuides(modifier: Modifier = Modifier) {
-    val line = Color(0x29FFFFFF)
+    val line = Color(0x2EFFFFFF)
     Box(modifier) {
         Row(Modifier.fillMaxSize()) {
             Spacer(Modifier.weight(1f))

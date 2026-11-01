@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -36,13 +37,13 @@ import com.spektralab.app.export.ExportTarget
 import com.spektralab.app.ui.StockCatalog
 import com.spektralab.app.ui.Stocks
 import com.spektralab.app.ui.screens.batch.BatchScreen
+import com.spektralab.app.ui.screens.crop.CropScreen
+import com.spektralab.app.ui.screens.params.ParamsScreen
 import com.spektralab.app.ui.screens.importing.ImportRow
 import com.spektralab.app.ui.screens.importing.ImportScreen
-import com.spektralab.app.ui.screens.editor.CropSheet
 import com.spektralab.app.ui.screens.editor.EditorScreen
 import com.spektralab.app.ui.screens.editor.EditorTool
 import com.spektralab.app.ui.screens.editor.FilmSheet
-import com.spektralab.app.ui.screens.editor.ParamsSheet
 import com.spektralab.app.ui.screens.editor.StripEntry
 import com.spektralab.app.ui.screens.editor.frameNumber
 import com.spektralab.app.ui.screens.editor.stockOf
@@ -79,6 +80,9 @@ class MainActivity : ComponentActivity() {
     /** A5's aspect pill, kept on the screen rather than the engine. */
     private var aspect by mutableStateOf("原始")
 
+    /** A5's straighten angle, in degrees; the engine takes it as geometry. */
+    private var rotation by mutableStateOf(0f)
+
     /** C2's rows while an import is running, and whether that screen is up. */
     private var importRows by mutableStateOf<List<ImportRow>>(emptyList())
     private var importOpen by mutableStateOf(false)
@@ -98,17 +102,24 @@ class MainActivity : ComponentActivity() {
     private var exportDirectoryCallback: ((Uri) -> Unit)? = null
 
     private val pickImages = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        val picked = uris.distinct()
-        if (picked.isEmpty()) return@registerForActivityResult
+        importAll(uris.distinct())
+    }
+
+    /**
+     * Take a set of frames through C2.
+     *
+     * B2 hands its selection here and so does the system file picker, so the two
+     * doors cannot drift apart: one row per file with its own state, each row
+     * settled by that file's own open reaching Ready.
+     */
+    private fun importAll(picked: List<Uri>) {
+        if (picked.isEmpty()) return
         for (uri in picked) {
             runCatching {
                 contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             addToStrip(uri)
         }
-        // C2 draws one row per file with its own state, so the import has to be
-        // a sequence the user can watch rather than a loop that ends on the
-        // last file. Each row settles when its own `open` reaches Ready.
         importRows = picked.map { ImportRow(nameOf(it), ImportRow.State.Waiting) }
         importOpen = true
         lifecycleScope.launch {
@@ -117,11 +128,11 @@ class MainActivity : ComponentActivity() {
                     it[index] = it[index].copy(state = ImportRow.State.Working)
                 }
                 viewModel.open(uri, nameOf(uri))
-                // Waiting on `phase == Ready` alone is a trap: the previous
-                // file already left the state Ready, so `first` returns at once
-                // and the sequence races ahead — on the MI 8 that showed as an
-                // import screen stuck at 0% over a black preview. The wait has
-                // to name *this* file.
+                // Waiting on `phase == Ready` alone is a trap: the previous file
+                // already left the state Ready, so `first` returns at once and the
+                // sequence races ahead -- on the MI 8 that showed as an import
+                // screen stuck at 0% over a black preview. The wait has to name
+                // *this* file.
                 val settled = withTimeoutOrNull(120_000) {
                     viewModel.state.first {
                         it.source?.uri == uri && (it.phase == Phase.Ready || it.phase == Phase.Error)
@@ -184,7 +195,13 @@ class MainActivity : ComponentActivity() {
 
         @Suppress("DEPRECATION")
         val batch = intent?.getStringArrayListExtra(EXTRA_BATCH)?.map(Uri::parse).orEmpty()
-        if (batch.isNotEmpty()) {
+        val toImport = intent?.getStringArrayListExtra(EXTRA_IMPORT)?.map(Uri::parse).orEmpty()
+        if (toImport.isNotEmpty()) {
+            // B2 promised to import these, so they go through C2 rather than
+            // straight into the editor: the screen that says which file is being
+            // decoded is the one the prototype puts between the two.
+            importAll(toImport)
+        } else if (batch.isNotEmpty()) {
             batchUris = batch
             batchSelected = batch.indices.toSet()
             batchOpen = true
@@ -201,6 +218,24 @@ class MainActivity : ComponentActivity() {
 
                     LaunchedEffect(Unit) {
                         stocks = runCatching { StockCatalog.load(this@MainActivity) }.getOrDefault(Stocks())
+                    }
+
+                    LaunchedEffect(errorLine) {
+                        errorLine?.let {
+                            android.widget.Toast.makeText(this@MainActivity, it, android.widget.Toast.LENGTH_LONG).show()
+                            errorLine = null
+                        }
+                    }
+
+                    // A page that is not the editor is a page you can come back
+                    // from. Without this, back from 参数 or 裁剪 finished the
+                    // activity and the photograph being edited went with it.
+                    BackHandler(enabled = exportOpen || tool != null || importOpen) {
+                        when {
+                            importOpen -> Unit
+                            exportOpen -> exportOpen = false
+                            else -> tool = null
+                        }
                     }
 
                     if (batchOpen) {
@@ -248,31 +283,61 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             onExport = { exportOpen = true },
+                            note = batchNote,
                         )
                     } else if (importOpen) {
                         ImportScreen(
                             rows = importRows,
                             preview = state.bitmap,
-                            onCancel = {
-                                importOpen = false
-                                importRows = emptyList()
-                            },
+                            onCancel = { importOpen = false },
                         )
                     } else if (exportOpen) {
                         ExportScreen(
                             state = state,
-                            exportCount = strip.size.coerceAtLeast(1),
+                            exportCount = batchUris.ifEmpty { listOfNotNull(state.source?.uri) }.size,
                             directoryLabel = directoryLabel,
                             onClose = { exportOpen = false },
                             onPickDirectory = {
-                                exportDirectoryCallback = { picked ->
-                                    directoryLabel = picked.lastPathSegment?.substringAfterLast(':')
+                                exportDirectoryCallback = { uri ->
+                                    directoryLabel = uri.lastPathSegment
                                 }
                                 pickFolder.launch(null)
                             },
                             onExport = { spec ->
-                                viewModel.export(spec, ExportTarget.Directory, exportDirectory)
+                                val target = exportDirectory?.let { ExportTarget.Directory } ?: ExportTarget.Album
+                                viewModel.export(spec, target, exportDirectory)
                             },
+                        )
+                    } else if (tool == EditorTool.Params) {
+                        ParamsScreen(
+                            params = state.params,
+                            sourceName = state.source?.name,
+                            onDelta = { viewModel.setParams(it) },
+                            onBack = { tool = null },
+                        )
+                    } else if (tool == EditorTool.Crop) {
+                        CropScreen(
+                            bitmap = state.bitmap,
+                            aspect = aspect,
+                            rotation = rotation,
+                            outputLabel = state.source?.let {
+                                "输出 ${it.width} × ${it.height}"
+                            } ?: "输出 —",
+                            onAspect = { label -> aspect = label; viewModel.setParams(aspectDelta(label)) },
+                            onRotate = { clockwise ->
+                                viewModel.setParams(JSONObject().put("geometry_quarter_turns", if (clockwise) 3 else 1))
+                            },
+                            onFlip = { horizontal ->
+                                viewModel.setParams(
+                                    JSONObject().put(if (horizontal) "geometry_flip_h" else "geometry_flip_v", true),
+                                )
+                            },
+                            onStraighten = { degrees ->
+                                rotation = degrees
+                                viewModel.setParams(JSONObject().put("geometry_rotation_deg", degrees.toDouble()))
+                            },
+                            onCancel = { tool = null },
+                            onDone = { tool = null },
                         )
                     } else {
                         EditorScreen(
@@ -291,40 +356,19 @@ class MainActivity : ComponentActivity() {
                             tool = tool,
                             onExport = { exportOpen = true },
                             sheet = {
-                                when (tool) {
-                                    EditorTool.Film -> FilmSheet(
+                                if (tool == EditorTool.Film) {
+                                    FilmSheet(
                                         films = stocks.films,
                                         papers = stocks.prints,
+                                        illuminants = stocks.illuminants,
                                         filmStock = state.params?.optString("film_stock"),
                                         paperStock = state.params?.optString("paper_stock"),
+                                        illuminant = state.params?.optString("enlarger_illuminant"),
                                         onPickFilm = { viewModel.setParams(JSONObject().put("film_stock", it)) },
                                         onPickPaper = { viewModel.setParams(JSONObject().put("paper_stock", it)) },
+                                        onPickIlluminant = { viewModel.setParams(JSONObject().put("enlarger_illuminant", it)) },
                                         onDismiss = { tool = null },
                                     )
-                                    EditorTool.Params -> ParamsSheet(
-                                        params = state.params,
-                                        onSetNumber = { key, value ->
-                                            viewModel.setParams(nestedDelta(key, value))
-                                        },
-                                        onDismiss = { tool = null },
-                                    )
-                                    EditorTool.Crop -> CropSheet(
-                                        aspect = aspect,
-                                        onAspect = { label -> aspect = label; viewModel.setParams(aspectDelta(label)) },
-                                        onRotate = { clockwise ->
-                                            viewModel.setParams(JSONObject().put("geometry_quarter_turns", if (clockwise) 3 else 1))
-                                        },
-                                        onFlip = { horizontal ->
-                                            viewModel.setParams(
-                                                JSONObject().put(
-                                                    if (horizontal) "geometry_flip_h" else "geometry_flip_v",
-                                                    true,
-                                                ),
-                                            )
-                                        },
-                                        onDismiss = { tool = null },
-                                    )
-                                    null -> Unit
                                 }
                             },
                         )
@@ -344,7 +388,24 @@ class MainActivity : ComponentActivity() {
         if (strip.none { it.uri == uri }) strip.add(StripEntry(uri, name))
     }
 
-    private fun nameOf(uri: Uri): String = uri.lastPathSegment?.substringAfterLast('/') ?: "photo"
+    /**
+     * What to call a frame.
+     *
+     * A `content://` uri's last segment is a database id, not a name: the editor's
+     * title read `1000000096` until this asked the provider for the display name.
+     * It falls back to the segment when the provider has none (a raw file picked
+     * through SAF sometimes does not), and to `photo` when there is nothing at all.
+     */
+    private fun nameOf(uri: Uri): String {
+        if (uri.scheme == "content") {
+            val name = runCatching {
+                contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+                    ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+            }.getOrNull()
+            if (!name.isNullOrBlank()) return name
+        }
+        return uri.lastPathSegment?.substringAfterLast('/') ?: "photo"
+    }
 
     /**
      * The plan's extension list (S5 item 1): the raw formats the engine's
@@ -422,6 +483,9 @@ class MainActivity : ComponentActivity() {
 
         /** B1's door: the frames that arrived already selected. */
         const val EXTRA_BATCH = "com.spektralab.app.BATCH"
+
+        /** B2's selection: frames to take through C2 before the editor opens. */
+        const val EXTRA_IMPORT = "com.spektralab.app.IMPORT"
 
         /** Plan S5 item 1's traversal list. */
         val RAW_EXTENSIONS = setOf(
