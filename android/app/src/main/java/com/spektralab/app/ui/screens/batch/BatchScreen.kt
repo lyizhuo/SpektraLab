@@ -1,23 +1,42 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package com.spektralab.app.ui.screens.batch
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,25 +49,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.spektralab.app.ui.frame.Layer
-import com.spektralab.app.ui.frame.ScreenBand
 import com.spektralab.app.ui.screens.editor.StripEntry
 import com.spektralab.app.ui.screens.editor.StripThumbnail
-import com.spektralab.app.ui.theme.Tokens
 
 /**
- * B1 — 多选与同步, transcribed from the frame `5:560`.
+ * B1 — multi-select and sync.
  *
- * The screen exists to answer one question honestly: *what travels* when
- * settings are copied between photographs. The frame answers it with the
- * "携带的分组" list, and it says out loud what does **not** travel — "不同步裁剪与
- * 显影后调整，且没有批量撤销". Both of those are real: cropping is per-frame
- * geometry and the undo stack is per-session, so a batch that claimed to carry
- * them would be lying.
+ * The screen answers one question honestly: *what travels* when settings are
+ * copied between photographs. The frame answers it with the 携带的分组 list and
+ * states what does **not** travel — crops and post-develop adjustments stay per
+ * frame, and there is no batch undo. Both are true: geometry is per-frame and
+ * the undo stack is per-session, so a batch claiming otherwise would lie.
  */
 @Composable
 fun BatchScreen(
@@ -64,102 +77,157 @@ fun BatchScreen(
     onSync: (Set<String>) -> Unit,
     onExport: () -> Unit,
 ) {
-    var groups by remember {
-        mutableStateOf(
-            setOf("胶片与相纸", "曝光", "白平衡", "胶片效果", "相纸效果", "场景置位"),
-        )
-    }
-    val count = selected.size
+    val all = listOf("胶片与相纸", "曝光", "白平衡", "胶片效果", "相纸效果", "场景置位")
+    var groups by remember { mutableStateOf(all.toSet()) }
 
-    ScreenBand {
-        // ---- topbar --------------------------------------------------------
-        Text(
-            text = "已选 $count 张",
-            style = TextStyle(fontFamily = Tokens.Sans, fontSize = 14.sp, color = Tokens.Ink),
-            modifier = Modifier.offset(x = 20.dp, y = 56.dp).testTag("batch-count"),
-        )
-        Box(Modifier.offset(y = 57.dp).fillMaxWidth().padding(end = 20.dp), contentAlignment = Alignment.TopEnd) {
-            Text(
-                text = "退出",
-                style = TextStyle(fontFamily = Tokens.Sans, fontSize = 12.sp, color = Tokens.Accent),
-                modifier = Modifier.clickable(onClick = onExit).testTag("batch-exit"),
+    Scaffold(
+        modifier = Modifier.testTag("batch"),
+        containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets.safeDrawing,
+        topBar = {
+            TopAppBar(
+                title = { Text("已选 ${selected.size} 张", style = MaterialTheme.typography.titleMedium) },
+                actions = {
+                    TextButton(onClick = onExit, modifier = Modifier.testTag("batch-exit")) {
+                        Text("退出", color = MaterialTheme.colorScheme.primary)
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                ),
             )
-        }
-
-        // ---- canvas: the current frame inside a film edge ------------------
-        Layer(x = 0.dp, y = 92.dp, fillWidth = true, height = 520.dp) {
-            Box(Modifier.fillMaxSize().background(Color(0xFF0C0B0A)))
-            Layer(x = 44.dp, y = 30.dp, width = 324.dp, height = 460.dp) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(Color(0xFF141009)),
-                ) {
+        },
+        bottomBar = {
+            Surface(color = MaterialTheme.colorScheme.surface) {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
                     Text(
-                        text = stockLabel,
-                        style = TextStyle(fontFamily = Tokens.Mono, fontSize = 6.5.sp, color = Color(0xFFC9A16A)),
-                        modifier = Modifier.offset(x = 8.dp, y = 6.dp),
+                        text = "同步设置会写入选中的 ${selected.size} 张照片。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Box(Modifier.offset(y = 6.dp).fillMaxWidth().padding(end = 8.dp), contentAlignment = Alignment.TopEnd) {
-                        Text(
-                            text = frameNumber,
-                            style = TextStyle(fontFamily = Tokens.Mono, fontSize = 6.5.sp, color = Color(0xFFC9A16A)),
-                        )
-                    }
-                    repeat(9) { index ->
-                        val x = 8.dp + (34.88 * index).dp
-                        Sprocket(x, 11.dp)
-                        Sprocket(x, 441.dp)
-                    }
-                    Box(
-                        Modifier
-                            .offset(x = 8.dp, y = 22.dp)
-                            .size(width = 308.dp, height = 416.dp)
-                            .background(Color(0xFF0A0908)),
-                    ) {
-                        bitmap?.let {
-                            Image(
-                                bitmap = it.asImageBitmap(),
-                                contentDescription = null,
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier.fillMaxSize(),
+                    Text(
+                        text = "不同步裁剪与显影后调整，且没有批量撤销。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(onClick = onCopy, modifier = Modifier.testTag("batch-copy")) {
+                            Text("拷贝", style = MaterialTheme.typography.labelMedium)
+                        }
+                        FilledTonalButton(onClick = onPaste, modifier = Modifier.testTag("batch-paste")) {
+                            Text("粘贴", style = MaterialTheme.typography.labelMedium)
+                        }
+                        Button(
+                            onClick = { onSync(groups) },
+                            enabled = selected.isNotEmpty(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
+                            ),
+                            modifier = Modifier.testTag("batch-sync"),
+                        ) {
+                            Text(
+                                "同步到 ${selected.size} 张",
+                                style = MaterialTheme.typography.labelMedium,
                             )
                         }
+                        TextButton(onClick = onExport, modifier = Modifier.testTag("batch-export")) {
+                            Text("导出", style = MaterialTheme.typography.labelMedium)
+                        }
                     }
+                    Spacer(Modifier.height(12.dp))
                     Text(
-                        text = "16A",
-                        style = TextStyle(fontFamily = Tokens.Mono, fontSize = 6.5.sp, color = Color(0xFFC9A16A)),
-                        modifier = Modifier.offset(x = 8.dp, y = 447.dp),
+                        text = "携带的分组",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.tertiary,
                     )
-                    Box(Modifier.offset(y = 447.dp).fillMaxWidth().padding(end = 8.dp), contentAlignment = Alignment.TopEnd) {
-                        Text(
-                            text = "$frameNumber ▮▮▮",
-                            style = TextStyle(fontFamily = Tokens.Mono, fontSize = 6.5.sp, color = Color(0xFFC9A16A)),
+                    all.chunked(2).forEach { pair ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            pair.forEach { label ->
+                                Row(
+                                    Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            groups = if (label in groups) groups - label else groups + label
+                                        },
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Checkbox(
+                                        checked = label in groups,
+                                        onCheckedChange = {
+                                            groups = if (label in groups) groups - label else groups + label
+                                        },
+                                        modifier = Modifier.testTag("carry-$label"),
+                                    )
+                                    Text(label, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    ) { insets ->
+        Column(Modifier.fillMaxSize().padding(insets).padding(horizontal = 16.dp)) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF0C0B0A)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(0.86f)
+                        .aspectRatio(
+                            if (bitmap != null && bitmap.height > 0) {
+                                bitmap.width.toFloat() / bitmap.height
+                            } else {
+                                3f / 2f
+                            },
+                        )
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF141009)),
+                ) {
+                    bitmap?.let {
+                        Image(
+                            bitmap = it.asImageBitmap(),
+                            contentDescription = null,
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize(),
                         )
                     }
                 }
             }
-        }
-
-        // ---- filmstrip, with the selected frames marked --------------------
-        Layer(x = 0.dp, y = 612.dp, fillWidth = true, height = 62.dp) {
-            Box(Modifier.fillMaxSize().background(Color(0xFF151210)))
             Row(
-                Modifier.offset(x = 16.dp, y = 8.dp),
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = stockLabel,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = frameNumber,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
+            LazyRow(
+                Modifier.fillMaxWidth().height(72.dp),
+                contentPadding = PaddingValues(vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                strip.take(6).forEachIndexed { index, entry ->
+                itemsIndexed(strip) { index, entry ->
                     val picked = index in selected
                     Box(
                         Modifier
-                            .size(width = 58.dp, height = 46.dp)
-                            .clip(RoundedCornerShape(3.dp))
-                            .border(
-                                width = if (picked) 2.dp else 1.dp,
-                                color = if (picked) Tokens.Accent else Tokens.Hairline,
-                                shape = RoundedCornerShape(3.dp),
-                            )
+                            .size(width = 58.dp, height = 58.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
                             .clickable { onToggle(index) }
                             .testTag("batch-frame-$index"),
                     ) {
@@ -169,133 +237,22 @@ fun BatchScreen(
                                 Modifier
                                     .align(Alignment.TopEnd)
                                     .padding(3.dp)
-                                    .size(12.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(Tokens.Accent),
-                            )
+                                    .size(16.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.primary),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.size(11.dp),
+                                )
+                            }
                         }
                     }
                 }
             }
         }
-
-        // ---- select-actions ------------------------------------------------
-        Layer(x = 0.dp, y = 674.dp, fillWidth = true, height = 241.dp) {
-            Box(Modifier.fillMaxSize().background(Color(0xF7181513)))
-            Box(Modifier.fillMaxWidth().height(1.dp).background(Tokens.PillHairline))
-            Text(
-                text = "同步设置会写入选中的 $count 张照片。",
-                style = TextStyle(fontFamily = Tokens.Sans, fontSize = 11.sp, color = Tokens.InkSecondary),
-                modifier = Modifier.offset(x = 20.dp, y = 18.dp),
-            )
-            Text(
-                text = "不同步裁剪与显影后调整，且没有批量撤销。",
-                style = TextStyle(fontFamily = Tokens.Sans, fontSize = 10.sp, color = Tokens.InkTertiary),
-                modifier = Modifier.offset(x = 20.dp, y = 36.dp),
-            )
-            Row(
-                Modifier.offset(x = 20.dp, y = 66.dp),
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-            ) {
-                ActionPill("拷贝", onClick = onCopy, tag = "batch-copy")
-                ActionPill("粘贴", onClick = onPaste, tag = "batch-paste")
-                ActionPill(
-                    "同步到 $count 张",
-                    accent = true,
-                    enabled = count > 0,
-                    onClick = { onSync(groups) },
-                    tag = "batch-sync",
-                )
-                ActionPill("导出", onClick = onExport, tag = "batch-export")
-            }
-            Text(
-                text = "携带的分组",
-                style = TextStyle(fontFamily = Tokens.Sans, fontSize = 10.sp, color = Tokens.InkTertiary),
-                modifier = Modifier.offset(x = 20.dp, y = 124.dp),
-            )
-            val labels = listOf(
-                "胶片与相纸" to 0,
-                "曝光" to 1,
-                "白平衡" to 2,
-                "胶片效果" to 3,
-                "相纸效果" to 4,
-                "场景置位" to 5,
-            )
-            labels.forEach { (label, index) ->
-                val x = if (index % 2 == 0) 20.dp else 206.dp
-                val y = 148.dp + (30 * (index / 2)).dp
-                val on = label in groups
-                Box(
-                    Modifier
-                        .offset(x = x, y = y)
-                        .size(14.dp)
-                        .clip(RoundedCornerShape(3.5.dp))
-                        .background(if (on) Color(0xE6E1A95F) else Color(0x14FFFFFF))
-                        .clickable {
-                            groups = if (on) groups - label else groups + label
-                        }
-                        .testTag("carry-$label"),
-                )
-                Text(
-                    text = label,
-                    style = TextStyle(fontFamily = Tokens.Sans, fontSize = 10.5.sp, color = Tokens.InkSecondary),
-                    modifier = Modifier.offset(x = x + 22.dp, y = y - 1.dp),
-                )
-            }
-        }
-
-        Box(
-            Modifier
-                .offset(x = 146.dp, y = 892.dp)
-                .size(width = 120.dp, height = 4.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(Tokens.Ink.copy(alpha = 0.35f)),
-        )
-    }
-}
-
-@Composable
-private fun Sprocket(x: androidx.compose.ui.unit.Dp, y: androidx.compose.ui.unit.Dp) {
-    Box(
-        Modifier
-            .offset(x = x, y = y)
-            .size(width = 13.dp, height = 8.dp)
-            .clip(RoundedCornerShape(2.dp))
-            .background(Color(0xE6160D06)),
-    )
-}
-
-@Composable
-private fun ActionPill(
-    label: String,
-    accent: Boolean = false,
-    enabled: Boolean = true,
-    onClick: () -> Unit,
-    tag: String,
-) {
-    Box(
-        Modifier
-            .width(88.dp)
-            .height(40.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .background(
-                when {
-                    accent && enabled -> Color(0xF2E1A95F)
-                    else -> Color(0x0DFFFFFF)
-                },
-            )
-            .clickable(enabled = enabled, onClick = onClick)
-            .testTag(tag),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            style = TextStyle(
-                fontFamily = Tokens.Sans,
-                fontSize = 11.sp,
-                color = if (accent && enabled) Color(0xFF231708) else Tokens.InkSecondary,
-                fontWeight = if (accent && enabled) FontWeight.SemiBold else FontWeight.Normal,
-            ),
-        )
     }
 }

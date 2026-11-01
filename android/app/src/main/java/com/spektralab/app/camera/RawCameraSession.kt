@@ -117,10 +117,14 @@ class RawCameraSession(
                         reader = imageReader
                         imageReader.setOnImageAvailableListener({ r -> onImage(r) }, handler)
 
-                        // Pin the buffer to the size the caller already told the
-                        // SurfaceHolder, so the view and the stream agree.
-                        val preview = choosePreviewSize(map.getOutputSizes(SurfaceHolder::class.java)?.toList().orEmpty())
-                        previewSize = preview
+                        // Pin the buffer to a size the camera really produces and
+                        // that has the *capture* frame's aspect: the viewfinder
+                        // and the DNG must agree, or the edges lie.
+                        val previewSizeChosen = choosePreviewSize(
+                            map.getOutputSizes(SurfaceHolder::class.java)?.toList().orEmpty(),
+                            raw.width.toFloat() / raw.height.toFloat(),
+                        )
+                        previewSize = previewSizeChosen
                         val outputs = listOfNotNull(previewTarget, imageReader.surface)
                         @Suppress("DEPRECATION")
                         camera.createCaptureSession(outputs, object : CameraCaptureSession.StateCallback() {
@@ -308,13 +312,35 @@ class RawCameraSession(
     * A 2 MP ceiling keeps the preview cheap; 16:9 is preferred because it is
     * the shape phones actually display, so the centre-crop discards the least.
     */
+    /**
+ * The capture frame's own size — the largest RAW_SENSOR output.
+ *
+ * The viewfinder is composed against this aspect, not against the screen's, so
+ * what the user frames is what the DNG contains. Cropping a 4:3 sensor to a
+ * 19.5:9 window would hide a sixth of every frame.
+ */
+    fun rawSizeFor(context: Context, lens: LensSpec?): Size {
+        if (lens == null) return Size(4000, 3000)
+        val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val map = manager.getCameraCharacteristics(lens.cameraId)
+            .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?: return Size(4000, 3000)
+        return map.getOutputSizes(ImageFormat.RAW_SENSOR)
+            ?.maxByOrNull { it.width.toLong() * it.height }
+            ?: Size(4000, 3000)
+    }
+
     fun previewSizeFor(context: Context, lens: LensSpec?): Size {
         if (lens == null) return Size(1920, 1080)
         val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val map = manager.getCameraCharacteristics(lens.cameraId)
             .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             ?: return Size(1920, 1080)
-        return choosePreviewSize(map.getOutputSizes(SurfaceHolder::class.java)?.toList().orEmpty())
+                val raw = rawSizeFor(context, lens)
+        return choosePreviewSize(
+            map.getOutputSizes(SurfaceHolder::class.java)?.toList().orEmpty(),
+            raw.width.toFloat() / raw.height.toFloat(),
+        )
     }
 
     /**
@@ -326,12 +352,15 @@ class RawCameraSession(
      * a 4:3 2 MP is a worse viewfinder than a 16:9 1080p even though it has more
      * pixels.
      */
-    private fun choosePreviewSize(sizes: List<Size>): Size {
+    private fun choosePreviewSize(sizes: List<Size>, targetAspect: Float): Size {
         if (sizes.isEmpty()) return Size(1920, 1080)
         val withinBudget = sizes.filter { it.width.toLong() * it.height <= 2_100_000L }
             .ifEmpty { listOf(sizes.minByOrNull { it.width.toLong() * it.height }!!) }
+        // Aspect is the hard requirement now: the preview must have the same
+        // shape as the DNG, or the viewfinder lies about the edges. Size only
+        // breaks ties among the ones that match.
         return withinBudget.minByOrNull { size ->
-            val aspectError = kotlin.math.abs(size.width.toDouble() / size.height - 16.0 / 9.0)
+            val aspectError = kotlin.math.abs(size.width.toDouble() / size.height - targetAspect)
             aspectError * 1000 + kotlin.math.abs(size.width.toLong() * size.height - 2_073_600L) / 1_000_000.0
         } ?: sizes.first()
     }

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -285,16 +286,21 @@ private fun Viewfinder(
         //    part the sensor did not see at the edges is simply not shown, which
         //    is what every camera app does and what the frame's full-bleed
         //    picture implies.
+        // The frame the user composes must be the frame the DNG holds. The
+        // viewfinder therefore takes the *capture* aspect and is letterboxed
+        // inside the space the chrome leaves — no crop (which would hide a sixth
+        // of a 4:3 sensor on a 19.5:9 screen) and no stretch (which is not a
+        // camera, it is a bug).
+        val raw = remember(selectedStop) { RawCameraSession.rawSizeFor(context, selectedStop.lens) }
         val buffer = remember(selectedStop) {
             RawCameraSession.previewSizeFor(context, selectedStop.lens)
         }
-        val bufferAspect = buffer.width.toFloat() / buffer.height.toFloat()
-        val containerAspect = maxWidth / maxHeight
-        val preview = if (containerAspect < bufferAspect) {
-            Modifier.fillMaxHeight().aspectRatio(bufferAspect, matchHeightConstraintsFirst = true)
-        } else {
-            Modifier.fillMaxWidth().aspectRatio(bufferAspect)
-        }
+        val bufferAspect = raw.width.toFloat() / raw.height.toFloat()
+        // Fit inside, never fill: the sensor's whole field is visible.
+        val preview = Modifier
+            .fillMaxSize()
+            .wrapContentSize(Alignment.Center)
+            .aspectRatio(bufferAspect, matchHeightConstraintsFirst = true)
         AndroidView(
             modifier = preview
                 .align(Alignment.Center)

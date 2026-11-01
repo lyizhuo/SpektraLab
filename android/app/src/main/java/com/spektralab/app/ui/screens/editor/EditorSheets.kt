@@ -1,23 +1,36 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package com.spektralab.app.ui.screens.editor
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Flip
+import androidx.compose.material.icons.outlined.RotateLeft
+import androidx.compose.material.icons.outlined.RotateRight
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -25,98 +38,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.spektralab.app.export.ExportColorSpace
-import com.spektralab.app.export.ExportFormat
-import com.spektralab.app.ui.theme.Tokens
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 /**
- * The panels that overlay [EditorScreen]: A2 胶片与印相, A3/A4 参数, A5 裁剪.
+ * A2 / A3 / A4 / A5 — the sheets.
  *
- * They are sheets rather than screens because the frames draw them that way —
- * the canvas stays visible above the sheet, and every one of them is reachable
- * from the same three toolbar buttons.
+ * `ModalBottomSheet` rather than a hand-rolled scrim: it brings the drag handle,
+ * the back gesture and the scrim's accessibility, which a `Box` with a black
+ * overlay does not. The content and its order are the frames'.
  */
-
-/** A sheet's chrome: the scrim over the canvas, the panel, its grabber. */
-@Composable
-fun SheetScaffold(
-    height: androidx.compose.ui.unit.Dp,
-    onDismiss: () -> Unit,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    Box(Modifier.fillMaxSize().testTag("sheet-scrim")) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color(0x99000000))
-                .clickable(onClick = onDismiss),
-        )
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .height(height)
-                .align(Alignment.BottomCenter)
-                .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
-                .background(Color(0xFF17130F)),
-        ) {
-            Box(
-                Modifier
-                    .padding(top = 8.dp)
-                    .align(Alignment.CenterHorizontally)
-                    .size(width = 36.dp, height = 4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Tokens.Ink.copy(alpha = 0.22f)),
-            )
-            content()
-        }
-    }
-}
-
-/** A pill that is either chosen or not; the frames' selected state is a fill. */
-@Composable
-fun ChoicePill(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    width: androidx.compose.ui.unit.Dp? = null,
-    tag: String = "pill-$label",
-) {
-    Box(
-        Modifier
-            .then(if (width != null) Modifier.width(width) else Modifier)
-            .height(32.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(if (selected) Color(0x21FFFFFF) else Color(0x0AFFFFFF))
-            .then(
-                if (selected) Modifier.border(1.dp, Tokens.Accent.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
-                else Modifier,
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp)
-            .testTag(tag),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            style = TextStyle(
-                fontFamily = Tokens.Sans,
-                fontSize = 10.5.sp,
-                color = if (selected) Tokens.Ink else Tokens.InkTertiary,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            ),
-        )
-    }
-}
-
-/** A2 — 胶片与印相: the pair, and the only place both are chosen. */
 @Composable
 fun FilmSheet(
     films: List<String>,
@@ -127,72 +62,64 @@ fun FilmSheet(
     onPickPaper: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    SheetScaffold(height = 420.dp, onDismiss = onDismiss) {
-        Text(
-            text = "胶片与印相",
-            style = TextStyle(fontFamily = Tokens.Sans, fontSize = 15.sp, color = Tokens.Ink, fontWeight = FontWeight.SemiBold),
-            modifier = Modifier.padding(start = 20.dp, top = 14.dp),
-        )
-        Text(
-            text = "胶片决定色彩，印相决定它的落点",
-            style = TextStyle(fontFamily = Tokens.Sans, fontSize = 9.5.sp, color = Tokens.InkTertiary),
-            modifier = Modifier.padding(start = 20.dp, top = 2.dp),
-        )
-        SectionLabel("胶片", Modifier.padding(start = 20.dp, top = 16.dp))
-        StockRows(films, filmStock, onPickFilm, "film")
-        SectionLabel("印相纸", Modifier.padding(start = 20.dp, top = 12.dp))
-        StockRows(papers, paperStock, onPickPaper, "paper")
-    }
-}
-
-@Composable
-private fun SectionLabel(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text = text,
-        style = TextStyle(fontFamily = Tokens.Sans, fontSize = 10.sp, color = Tokens.InkTertiary),
-        modifier = modifier,
-    )
-}
-
-@Composable
-private fun StockRows(stocks: List<String>, current: String?, onPick: (String) -> Unit, prefix: String) {
-    Column(Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
-        stocks.take(4).forEach { stock ->
-            val selected = stock == current
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(38.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(if (selected) Color(0x14E1A95F) else Color(0x08FFFFFF))
-                    .clickable { onPick(stock) }
-                    .padding(horizontal = 12.dp)
-                    .testTag("$prefix-$stock"),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    text = com.spektralab.app.rolls.stockLabel(stock),
-                    style = TextStyle(
-                        fontFamily = Tokens.Sans,
-                        fontSize = 11.5.sp,
-                        color = if (selected) Tokens.Accent else Tokens.Ink,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                    ),
-                )
-                if (selected) {
-                    Text(
-                        text = "✓",
-                        style = TextStyle(fontFamily = Tokens.Sans, fontSize = 12.sp, color = Tokens.Accent),
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+            Text("胶片与印相", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "胶片",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
+            LazyColumn(Modifier.height(170.dp).padding(top = 4.dp)) {
+                items(films) { stock ->
+                    ListItem(
+                        headlineContent = { Text(stock, style = MaterialTheme.typography.bodyMedium) },
+                        colors = ListItemDefaults.colors(
+                            containerColor = if (stock == filmStock) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                            } else {
+                                Color.Transparent
+                            },
+                        ),
+                        modifier = Modifier
+                            .testTag("film-$stock")
+                            .clickable { onPickFilm(stock) },
                     )
                 }
             }
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "相纸",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
+            LazyColumn(Modifier.height(140.dp).padding(top = 4.dp)) {
+                items(papers) { stock ->
+                    ListItem(
+                        headlineContent = { Text(stock, style = MaterialTheme.typography.bodyMedium) },
+                        colors = ListItemDefaults.colors(
+                            containerColor = if (stock == paperStock) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                            } else {
+                                Color.Transparent
+                            },
+                        ),
+                        modifier = Modifier
+                            .testTag("paper-$stock")
+                            .clickable { onPickPaper(stock) },
+                    )
+                }
+            }
         }
     }
 }
 
-/** A3 / A4 — 参数, split by the frame's own segmented control. */
+/** A3 显影前 / A4 显影后 on one sheet, with the frame's own segmented control. */
 @Composable
 fun ParamsSheet(
     params: JSONObject?,
@@ -200,159 +127,101 @@ fun ParamsSheet(
     onDismiss: () -> Unit,
 ) {
     var after by remember { mutableStateOf(false) }
-    SheetScaffold(height = 470.dp, onDismiss = onDismiss) {
-        Row(
-            Modifier.padding(start = 20.dp, top = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            ChoicePill("显影前", !after, { after = false }, tag = "params-before")
-            ChoicePill("显影后", after, { after = true }, tag = "params-after")
-        }
-        if (!after) {
-            SceneLatitude(params)
-            MeteringRow()
-            Slider("胶片曝光", keyOf(params, "exposure_compensation_ev"), -3.0, 3.0, "EV", params, onSetNumber)
-            Slider("颗粒", keyOf(params, "grain_amount"), 0.0, 2.0, "", params, onSetNumber)
-            Slider("光晕", keyOf(params, "halation_amount"), 0.0, 2.0, "", params, onSetNumber)
-        } else {
-            Text(
-                text = "显影后的控制作用于印相，不改变底片",
-                style = TextStyle(fontFamily = Tokens.Sans, fontSize = 9.5.sp, color = Tokens.InkTertiary),
-                modifier = Modifier.padding(start = 20.dp, top = 12.dp),
-            )
-            Slider("高光回拉", keyOf(params, "highlight_recovery"), 0.0, 1.0, "", params, onSetNumber)
-            Slider("阴影回拉", keyOf(params, "shadow_recovery"), 0.0, 1.0, "", params, onSetNumber)
-        }
-    }
-}
+    val rows = if (after) afterRows else beforeRows
 
-@Composable
-private fun SceneLatitude(params: JSONObject?) {
-    Text(
-        text = "场景宽容度",
-        style = TextStyle(fontFamily = Tokens.Sans, fontSize = 10.sp, color = Tokens.InkTertiary),
-        modifier = Modifier.padding(start = 20.dp, top = 16.dp),
-    )
-    Text(
-        text = "保持 5.7 档",
-        style = TextStyle(fontFamily = Tokens.Sans, fontSize = 11.5.sp, color = Tokens.Ink),
-        modifier = Modifier.padding(start = 20.dp, top = 2.dp),
-    )
-    Row(
-        Modifier.padding(start = 20.dp, top = 8.dp, end = 20.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {
-        // Three zones of the input's own distribution, as A3 draws them.
-        listOf("低于 6%" to 0.06f, "区间内 89%" to 0.89f, "高于 5%" to 0.05f).forEach { (label, fraction) ->
-            Column {
-                Box(
-                    Modifier
-                        .width((fraction * 300).dp.coerceAtLeast(20.dp))
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(Tokens.AccentFill),
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = label,
-                    style = TextStyle(fontFamily = Tokens.Sans, fontSize = 8.sp, color = Tokens.InkTertiary),
-                )
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                listOf(false, true).forEachIndexed { index, isAfter ->
+                    SegmentedButton(
+                        selected = after == isAfter,
+                        onClick = { after = isAfter },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = 2),
+                        label = { Text(if (isAfter) "显影后" else "显影前") },
+                        modifier = Modifier.testTag(if (isAfter) "params-after" else "params-before"),
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            LazyColumn(Modifier.height(340.dp)) {
+                items(rows) { spec ->
+                    ParamRow(
+                        spec = spec,
+                        value = readNumber(params, spec.key, spec.initial),
+                        onChange = { onSetNumber(spec.key, it) },
+                    )
+                }
             }
         }
     }
 }
 
-@Composable
-private fun MeteringRow() {
-    Row(
-        Modifier
-            .padding(start = 20.dp, top = 12.dp, end = 20.dp)
-            .fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(
-            text = "输入 / 相机",
-            style = TextStyle(fontFamily = Tokens.Sans, fontSize = 10.sp, color = Tokens.InkSecondary),
-        )
-        Text(
-            text = "重置",
-            style = TextStyle(fontFamily = Tokens.Sans, fontSize = 10.sp, color = Tokens.Accent),
-        )
-    }
-}
+private data class ParamSpec(
+    val label: String,
+    val key: String,
+    val min: Float,
+    val max: Float,
+    val step: Float,
+    val initial: Float,
+)
 
-/**
- * A labelled value with ± buttons rather than a Material slider.
- *
- * The frames draw these as a readout plus a track; ± is the honest minimum
- * that actually moves the engine's number, and it survives a small screen.
- */
+/** A3's list; the keys are the engine's wire names. */
+private val beforeRows = listOf(
+    ParamSpec("曝光补偿", "exposure_compensation_ev", -3f, 3f, 0.1f, 0f),
+    ParamSpec("色温", "white_balance_k", 3000f, 9000f, 100f, 5500f),
+    ParamSpec("色调", "tint", -60f, 60f, 1f, 0f),
+    ParamSpec("颗粒", "grain_amount", 0f, 2f, 0.05f, 1f),
+    ParamSpec("光晕", "halation_amount", 0f, 2f, 0.05f, 0.5f),
+    ParamSpec("场景置位", "scene_placement_ev", -2f, 2f, 0.1f, 0f),
+)
+
+/** A4's list: what the print stage owns. */
+private val afterRows = listOf(
+    ParamSpec("放大曝光", "print_exposure", 0.4f, 2.5f, 0.02f, 1f),
+    ParamSpec("对比", "print_contrast", 0.5f, 2f, 0.02f, 1f),
+    ParamSpec("偏色 M", "print_compensation_m", -0.5f, 0.5f, 0.01f, 0f),
+    ParamSpec("偏色 Y", "print_compensation_y", -0.5f, 0.5f, 0.01f, 0f),
+    ParamSpec("前闪", "preflash_exposure", 0f, 1f, 0.02f, 0f),
+)
+
 @Composable
-private fun Slider(
-    label: String,
-    key: String?,
-    min: Double,
-    max: Double,
-    unit: String,
-    params: JSONObject?,
-    onSet: (String, Double) -> Unit,
-) {
-    val current = key?.let { readNumber(params, it) }
-    val step = (max - min) / 20.0
-    Column(Modifier.padding(start = 20.dp, top = 12.dp, end = 20.dp)) {
+private fun ParamRow(spec: ParamSpec, value: Float, onChange: (Double) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(spec.label, style = MaterialTheme.typography.bodyMedium)
             Text(
-                text = label,
-                style = TextStyle(fontFamily = Tokens.Sans, fontSize = 11.sp, color = Tokens.InkSecondary),
-            )
-            Text(
-                text = if (current == null) "未就绪" else "%.2f%s".format(current, unit),
-                style = TextStyle(
-                    fontFamily = Tokens.Mono,
-                    fontSize = 11.sp,
-                    color = if (current == null) Tokens.InkTertiary else Tokens.Ink,
-                ),
+                text = formatValue(value, spec.step),
+                style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.primary,
             )
         }
-        Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Step("−") { if (key != null && current != null) onSet(key, (current - step).coerceIn(min, max)) }
-            Box(
-                Modifier
+            StepButton("−") { onChange((value - spec.step).coerceAtLeast(spec.min).toDouble()) }
+            Slider(
+                value = value,
+                onValueChange = { onChange(quantise(it, spec.step).toDouble()) },
+                valueRange = spec.min..spec.max,
+                modifier = Modifier
                     .weight(1f)
-                    .height(3.dp)
-                    .padding(horizontal = 10.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Tokens.Track),
-            ) {
-                val fraction = if (current == null) 0f else ((current - min) / (max - min)).toFloat()
-                Box(
-                    Modifier
-                        .fillMaxWidth(fraction.coerceIn(0f, 1f))
-                        .height(3.dp)
-                        .background(Tokens.AccentFill),
-                )
-            }
-            Step("＋") { if (key != null && current != null) onSet(key, (current + step).coerceIn(min, max)) }
+                    .padding(horizontal = 6.dp)
+                    .testTag("field-${spec.key}"),
+            )
+            StepButton("+") { onChange((value + spec.step).coerceAtMost(spec.max).toDouble()) }
         }
     }
 }
 
 @Composable
-private fun Step(label: String, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .size(28.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(Tokens.Pill)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(text = label, style = TextStyle(fontFamily = Tokens.Sans, fontSize = 13.sp, color = Tokens.Ink))
+private fun StepButton(symbol: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = Modifier.width(36.dp)) {
+        Text(symbol, style = MaterialTheme.typography.titleMedium)
     }
 }
 
-/** A5 — 裁剪: the aspect and the four transforms, as the frame lists them. */
 @Composable
 fun CropSheet(
     aspect: String,
@@ -361,66 +230,72 @@ fun CropSheet(
     onFlip: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    SheetScaffold(height = 260.dp, onDismiss = onDismiss) {
-        Text(
-            text = "裁剪",
-            style = TextStyle(fontFamily = Tokens.Sans, fontSize = 15.sp, color = Tokens.Ink, fontWeight = FontWeight.SemiBold),
-            modifier = Modifier.padding(start = 20.dp, top = 14.dp),
-        )
-        Row(
-            Modifier.padding(start = 20.dp, top = 14.dp, end = 20.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            listOf("自由", "原始", "1:1", "3:2", "4:3", "16:9").forEach { label ->
-                ChoicePill(label, aspect == label, { onAspect(label) }, tag = "aspect-$label")
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+            Text("裁剪", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(12.dp))
+            LazyColumn(Modifier.height(120.dp)) {
+                items(listOf("自由", "原始", "1:1", "3:2", "4:3", "16:9").chunked(3)) { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        row.forEach { option ->
+                            FilterChip(
+                                selected = option == aspect,
+                                onClick = { onAspect(option) },
+                                label = { Text(option, style = MaterialTheme.typography.labelSmall) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primary
+                                        .copy(alpha = 0.2f),
+                                ),
+                                modifier = Modifier.testTag("aspect-$option"),
+                            )
+                        }
+                    }
+                }
             }
-        }
-        Row(
-            Modifier.padding(start = 20.dp, top = 14.dp, end = 20.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            ChoicePill("左转", false, { onRotate(false) }, tag = "rotate-left")
-            ChoicePill("右转", false, { onRotate(true) }, tag = "rotate-right")
-            ChoicePill("水平翻转", false, { onFlip(true) }, tag = "flip-h")
-            ChoicePill("垂直翻转", false, { onFlip(false) }, tag = "flip-v")
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { onRotate(false) }) {
+                    Icon(Icons.Outlined.RotateLeft, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("左转")
+                }
+                TextButton(onClick = { onRotate(true) }) {
+                    Icon(Icons.Outlined.RotateRight, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("右转")
+                }
+                TextButton(onClick = { onFlip(true) }) {
+                    Icon(Icons.Outlined.Flip, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("水平")
+                }
+                TextButton(onClick = { onFlip(false) }) { Text("垂直") }
+            }
         }
     }
 }
 
+internal fun quantise(value: Float, step: Float): Float =
+    if (step <= 0f) value else (value / step).roundToInt() * step
+
+internal fun formatValue(value: Float, step: Float): String =
+    if (step >= 1f) value.roundToInt().toString() else String.format("%.2f", value)
+
 /**
- * The engine's parameter names, resolved against whichever shape it sends.
- *
- * The wire is nested (`film.grain_amount`) in the schema and flat in places, so
- * a key is tried in both forms before it is declared missing. Guessing a single
- * shape is how a control silently stops working the day the wire is regrouped.
+ * Reads a parameter by wire name, trying the flat key first and then the nested
+ * object the engine uses (`film`, `print`, `camera`, `scene`, `io`).
  */
-internal fun keyOf(params: JSONObject?, leaf: String): String? {
-    if (params == null) return null
-    if (params.has(leaf)) return leaf
-    val nested = listOf("film", "print", "camera", "scene", "io")
-        .firstOrNull { params.optJSONObject(it)?.has(leaf) == true }
-    return nested?.let { "$it.$leaf" }
+internal fun readNumber(params: JSONObject?, leaf: String, fallback: Float): Float {
+    if (params == null) return fallback
+    params.optDouble(leaf, Double.NaN).takeIf { !it.isNaN() }?.let { return it.toFloat() }
+    for (group in listOf("film", "print", "camera", "scene", "io", "geometry")) {
+        val nested = params.optJSONObject(group) ?: continue
+        val value = nested.optDouble(leaf, Double.NaN)
+        if (!value.isNaN()) return value.toFloat()
+    }
+    return fallback
 }
-
-internal fun readNumber(params: JSONObject?, key: String): Double? {
-    if (params == null) return null
-    if (params.has(key)) return params.optDouble(key).takeIf { !it.isNaN() }
-    val dot = key.indexOf('.')
-    if (dot < 0) return null
-    val parent = params.optJSONObject(key.substring(0, dot)) ?: return null
-    return parent.optDouble(key.substring(dot + 1)).takeIf { !it.isNaN() }
-}
-
-/** A6's format pills, in the frame's order. */
-internal val exportFormats: List<Pair<String, ExportFormat>> = listOf(
-    "TIFF 16" to ExportFormat.Tiff16,
-    "JPEG P3" to ExportFormat.Jpeg8,
-    "PNG sRGB" to ExportFormat.Png16,
-    "HEIC 10" to ExportFormat.Heic10,
-)
-
-internal val exportSpaces: List<Pair<String, ExportColorSpace>> = listOf(
-    "sRGB" to ExportColorSpace.Srgb,
-    "Display P3" to ExportColorSpace.DisplayP3,
-    "ProPhoto RGB" to ExportColorSpace.ProPhoto,
-)
