@@ -64,7 +64,10 @@ private val Fallback = Color(0xFF3A3A3A) to Color.White
 /** The stock's display name, tint and ink. Unknown ids still get a label. */
 fun stockStyle(stockId: String): StockStyle {
     val (tint, ink) = Table[stockId] ?: Fallback
-    return StockStyle(title = stockTitle(stockId), tint = tint, ink = ink)
+    // A blank id is not an unknown stock, it is an absent one: the engine
+    // reports `paper_stock: ""` before a pair is resolved, and `stockTitle("")`
+    // would return an empty label that renders as a blank line.
+    return StockStyle(title = stockTitle(stockId).ifBlank { "未选" }, tint = tint, ink = ink)
 }
 
 /**

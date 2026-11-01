@@ -190,8 +190,10 @@ private enum class FilmTab(val label: String, val enabled: Boolean = true) {
  */
 @Composable
 private fun BodyCard(filmStock: String?, paperStock: String?) {
-    val film = filmStock ?: "kodak_portra_400"
-    val paper = paperStock ?: "kodak_supra_endura"
+    // `""` counts as absent: the engine reports an empty string until the pair
+    // is resolved, and a blank id would print a blank name.
+    val film = filmStock?.ifBlank { null } ?: "kodak_portra_400"
+    val paper = paperStock?.ifBlank { null } ?: "kodak_supra_endura"
     val filmStyle = stockStyle(film)
     val paperStyle = stockStyle(paper)
 
@@ -212,22 +214,24 @@ private fun BodyCard(filmStock: String?, paperStock: String?) {
                 .background(Brush.linearGradient(listOf(filmStyle.tint, filmStyle.tint.copy(alpha = 0.55f)))),
         )
         Spacer(Modifier.width(10.dp))
-        Column {
-            Text(filmStyle.title, style = Tokens.Type.Value.copy(fontSize = 11.sp), color = Tokens.Ink)
+        // Both halves take a share of the row: with the two halves sized to
+        // their text and two spacers eating the slack, the paper's name was
+        // measured at zero width and simply did not appear.
+        Column(Modifier.weight(1f)) {
+            Text(filmStyle.title, style = Tokens.Type.Value.copy(fontSize = 11.sp), color = Tokens.Ink, maxLines = 1)
             Text(
                 text = "ISO ${isoOf(film)} · 负片",
                 style = Tokens.Type.Caption.copy(fontSize = 8.5.sp, fontFamily = Tokens.Mono),
                 color = Tokens.InkTertiary,
+                maxLines = 1,
             )
         }
-        Spacer(Modifier.weight(1f))
         Icon(
             painter = painterResource(R.drawable.ic_arrow_right),
             contentDescription = null,
             tint = Tokens.InkTertiary,
-            modifier = Modifier.size(16.dp),
+            modifier = Modifier.padding(horizontal = 10.dp).size(16.dp),
         )
-        Spacer(Modifier.weight(1f))
         Box(
             Modifier
                 .size(24.dp)
@@ -235,12 +239,13 @@ private fun BodyCard(filmStock: String?, paperStock: String?) {
                 .background(paperStyle.tint),
         )
         Spacer(Modifier.width(8.dp))
-        Column {
-            Text(paperStyle.title, style = Tokens.Type.Value.copy(fontSize = 11.sp), color = Tokens.Ink)
+        Column(Modifier.weight(1f)) {
+            Text(paperStyle.title, style = Tokens.Type.Value.copy(fontSize = 11.sp), color = Tokens.Ink, maxLines = 1)
             Text(
-                text = "相纸 · 彩色",
+                text = paperKind(paper),
                 style = Tokens.Type.Caption.copy(fontSize = 8.5.sp, fontFamily = Tokens.Mono),
                 color = Tokens.InkTertiary,
+                maxLines = 1,
             )
         }
     }
@@ -405,3 +410,7 @@ private val ISO_VALUES = setOf("25", "50", "100", "125", "160", "200", "400", "5
 
 /** The paper's display name, through the same table the roll tiles use. */
 fun paperTitle(stockId: String): String = stockTitle(stockId)
+
+/** `kodak_supra_endura` → `彩色相纸`; `ilford_multigrade_iv_rc` → `黑白相纸`. */
+fun paperKind(stockId: String): String =
+    if (stockId.contains("ilford") || stockId.contains("multigrade")) "黑白相纸" else "彩色相纸"
