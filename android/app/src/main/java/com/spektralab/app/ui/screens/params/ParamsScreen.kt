@@ -199,15 +199,28 @@ private fun BeforeContent(params: JSONObject?, onDelta: (JSONObject) -> Unit) {
     GroupHeader("输入 / 相机", trailing = "重置", onTrailing = {
         onDelta(
             JSONObject()
-                .put("camera", JSONObject().put("exposure_compensation_ev", 0.0).put("auto_exposure_method", "center_weighted"))
-                .put("film", JSONObject().put("grain_amount", 1.0).put("halation_amount", 1.0)),
+            .put("exposure_compensation_ev", 0.0)
+            .put("auto_exposure_method", "center_weighted")
+            .put("grain_amount", 1.0)
+            .put("halation_amount", 1.0),
         )
     })
 
     ChoiceRow(
         label = "测光",
         value = methodLabel(readString(params, "camera.auto_exposure_method", "center_weighted")),
-        onClick = { onDelta(JSONObject().put("camera", JSONObject().put("auto_exposure_method", nextMethod(readString(params, "camera.auto_exposure_method", "center_weighted"))))) },
+        onClick = {
+            // The wire is flat: `auto_exposure_method`, not `camera.{...}`.
+            // `validate_delta` looks every top-level key up in the schema, so a
+            // nested object under "camera" is an unknown field and the whole
+            // delta is rejected — the control looked wired and did nothing.
+            onDelta(
+                JSONObject().put(
+                    "auto_exposure_method",
+                    nextMethod(readString(params, "camera.auto_exposure_method", "center_weighted")),
+                ),
+            )
+        },
         tag = "params-metering",
     )
 
@@ -216,7 +229,7 @@ private fun BeforeContent(params: JSONObject?, onDelta: (JSONObject) -> Unit) {
         value = formatSigned(readNumber(params, "camera.exposure_compensation_ev", 0f), 1) + " EV",
         value2 = readNumber(params, "camera.exposure_compensation_ev", 0f),
         range = -3f..3f,
-        onChange = { onDelta(JSONObject().put("camera", JSONObject().put("exposure_compensation_ev", it.toDouble()))) },
+        onChange = { onDelta(JSONObject().put("exposure_compensation_ev", it.toDouble())) },
         tag = "field-exposure_compensation_ev",
     )
 
@@ -237,7 +250,7 @@ private fun BeforeContent(params: JSONObject?, onDelta: (JSONObject) -> Unit) {
                 60 -> 105.0
                 else -> 35.0
             }
-            onDelta(JSONObject().put("camera", JSONObject().put("film_format_mm", next)))
+            onDelta(JSONObject().put("film_format_mm", next))
         },
         tag = "params-format",
     )
@@ -245,13 +258,13 @@ private fun BeforeContent(params: JSONObject?, onDelta: (JSONObject) -> Unit) {
     SwitchRow(
         label = "颗粒",
         checked = readBool(params, "film.grain_active", true),
-        onChange = { onDelta(JSONObject().put("film", JSONObject().put("grain_active", it))) },
+        onChange = { onDelta(JSONObject().put("grain_active", it)) },
         tag = "switch-grain",
     )
     SwitchRow(
         label = "光晕",
         checked = readBool(params, "film.halation_active", true),
-        onChange = { onDelta(JSONObject().put("film", JSONObject().put("halation_active", it))) },
+        onChange = { onDelta(JSONObject().put("halation_active", it)) },
         tag = "switch-halation",
     )
 
@@ -394,7 +407,7 @@ private fun AfterContent(params: JSONObject?, onDelta: (JSONObject) -> Unit) {
 
         value2 = readNumber(params, "print.print_exposure", 1f),
         range = 0.4f..2.5f,
-        onChange = { onDelta(JSONObject().put("print", JSONObject().put("print_exposure", it.toDouble()))) },
+        onChange = { onDelta(JSONObject().put("print_exposure", it.toDouble())) },
         tag = "field-print_exposure",
     )
     SliderRow(
@@ -402,7 +415,7 @@ private fun AfterContent(params: JSONObject?, onDelta: (JSONObject) -> Unit) {
         value = formatSigned(readNumber(params, "film.density_curve_gamma", 1f) - 1f, 2),
         value2 = readNumber(params, "film.density_curve_gamma", 1f),
         range = 0.6f..1.6f,
-        onChange = { onDelta(JSONObject().put("film", JSONObject().put("density_curve_gamma", it.toDouble()))) },
+        onChange = { onDelta(JSONObject().put("density_curve_gamma", it.toDouble())) },
         tag = "field-density_curve_gamma",
     )
     DisabledSliderRow(label = "亮度", value = "0.00", note = "本平台没有这一层")
@@ -412,7 +425,7 @@ private fun AfterContent(params: JSONObject?, onDelta: (JSONObject) -> Unit) {
         value = formatSigned(readNumber(params, "print.contrast_mask_highlights", 0f), 2),
         value2 = readNumber(params, "print.contrast_mask_highlights", 0f),
         range = 0f..2f,
-        onChange = { onDelta(JSONObject().put("print", JSONObject().put("contrast_mask_highlights", it.toDouble()))) },
+        onChange = { onDelta(JSONObject().put("contrast_mask_highlights", it.toDouble())) },
         tag = "field-contrast_mask_highlights",
     )
 

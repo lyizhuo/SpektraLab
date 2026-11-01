@@ -77,6 +77,21 @@ class HomeActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission(),
     ) { /* either way the grid re-reads in onResume */ }
 
+    /**
+     * The camera hands back a DNG and the editor opens it.
+     *
+     * `startActivity` was enough while the result had nowhere to go, which
+     * is why a capture landed back on the library and looked like nothing
+     * had happened. The prototype's path is 拍摄 → A1, so the result is
+     * read and the frame opens.
+     */
+    private val launchCamera =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode != CameraActivity.RESULT_CAPTURED) return@registerForActivityResult
+            val uri = result.data?.data ?: return@registerForActivityResult
+            openInEditor(uri)
+        }
+
     private val pickImage = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) openInEditor(uri)
     }
@@ -121,10 +136,10 @@ class HomeActivity : ComponentActivity() {
                                 // "open this roll" means "make it current" when
                                 // it is not, and go shooting either way.
                                 if (rolls.current()?.id != roll.id) rolls.save(roll)
-                                startActivity(CameraActivity.intent(this@HomeActivity))
+                                launchCamera.launch(CameraActivity.intent(this@HomeActivity))
                             },
                             onPickAlbum = { pickerOpen = true },
-                            onCamera = { startActivity(CameraActivity.intent(this@HomeActivity)) },
+                            onCamera = { launchCamera.launch(CameraActivity.intent(this@HomeActivity)) },
                             onOpenRecent = { frame -> openInEditor(frame.uri) },
                             selection = selection,
                             onToggleSelection = { index ->

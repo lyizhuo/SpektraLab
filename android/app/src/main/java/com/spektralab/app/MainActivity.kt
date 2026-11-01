@@ -364,8 +364,19 @@ class MainActivity : ComponentActivity() {
                                         filmStock = state.params?.optString("film_stock"),
                                         paperStock = state.params?.optString("paper_stock"),
                                         illuminant = state.params?.optString("enlarger_illuminant"),
-                                        onPickFilm = { viewModel.setParams(JSONObject().put("film_stock", it)) },
-                                        onPickPaper = { viewModel.setParams(JSONObject().put("paper_stock", it)) },
+                                onPickFilm = { film ->
+                                    // A stock is measured against a particular
+                                    // paper: C200 against Crystal Archive, Portra
+                                    // against Portra Endura. Sending the film alone
+                                    // left it on whatever paper was selected, which is
+                                    // the other half of "the other films look wrong".
+                                    val delta = JSONObject().put("film_stock", film)
+                                    stocks.targetPrintFor(film)?.let { paper ->
+                                        delta.put("print_stock", paper)
+                                    }
+                                    viewModel.setParams(delta)
+                                },
+                                        onPickPaper = { viewModel.setParams(JSONObject().put("print_stock", it)) },
                                         onPickIlluminant = { viewModel.setParams(JSONObject().put("enlarger_illuminant", it)) },
                                         onDismiss = { tool = null },
                                     )
@@ -555,9 +566,9 @@ private fun syncDelta(source: JSONObject, groups: Set<String>): JSONObject {
             if (source.has(key)) delta.put(key, source.get(key))
         }
     }
-    if ("胶片与相纸" in groups) copy("film_stock", "paper_stock")
+    if ("胶片与相纸" in groups) copy("film_stock", "print_stock")
     if ("曝光" in groups) copy("exposure_compensation_ev")
-    if ("白平衡" in groups) copy("white_balance_k", "tint")
+    if ("白平衡" in groups) copy("c_filter_neutral", "m_filter_neutral", "y_filter_neutral")
     if ("胶片效果" in groups) copy("grain_amount", "halation_amount")
     return delta
 }

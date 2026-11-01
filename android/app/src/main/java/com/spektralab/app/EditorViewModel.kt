@@ -185,6 +185,18 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun setParams(delta: JSONObject, resumeTier: String = _state.value.tier) {
         viewModelScope.launch {
             val opened = ensureSession() ?: return@launch
+            // `film_stock` and `print_stock` are not parameters.
+            //
+            // `params.cpp`'s `validate_delta` skips them by name — "the caller
+            // loads profiles" — so `spk_set_params` accepts the key and does
+            // nothing with it. Sending a stock through this path left the
+            // session on whichever profile `spk_open` had loaded, which is why
+            // one film worked and every other choice silently rendered the same
+            // picture. A stock change re-opens the session instead.
+            if (delta.has("film_stock") || delta.has("print_stock")) {
+                reopenForStock(delta, resumeTier)
+                return@launch
+            }
             try {
                 val before = opened.params
                 val fields = delta.keys().asSequence().toSet()
@@ -210,6 +222,47 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             } catch (failure: Exception) {
                 _state.value = _state.value.copy(error = failure.message ?: failure.toString())
             }
+        }
+    }
+    /**
+     * Re-opens the session with a new film or paper.
+     *
+     * The engine loads a profile at `spk_open` and never again, so a stock is a
+     * property of the session, not of the parameter set. Everything else the
+     * user has set is carried across: the reopen builds a fresh `Params`, and a
+     * delta holding only the stock would quietly reset exposure, grain and
+     * geometry — the exact class of bug that made one film work and the rest
+     * look wrong.
+     */
+    private suspend fun reopenForStock(delta: JSONObject, resumeTier: String) {
+        val uri = currentUri ?: return
+        val name = currentName ?: return
+        try {
+            _state.value = _state.value.copy(phase = Phase.Opening, busy = true, error = null)
+            val merged = JSONObject((_state.value.params ?: JSONObject()).toString())
+            delta.keys().forEach { key -> merged.put(key, delta.get(key)) }
+            val reopened = openSession(uri, name, true, null, restoreEdits = false, initial = merged)
+            android.util.Log.i(
+                "SpektraLab",
+                "stock reopen: delta=" + delta + " -> params film=" +
+                    reopened.params.optString("film_stock") + " paper=" +
+                    reopened.params.optString("print_stock"),
+            )
+            _state.value = _state.value.copy(
+                params = reopened.params,
+                source = _state.value.source?.copy(width = reopened.width, height = reopened.height),
+                phase = Phase.Ready,
+            )
+            renderTier(resumeTier, reuse = _state.value.bitmap)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            android.util.Log.e("SpektraLab", "stock reopen failed", failure)
+            _state.value = _state.value.copy(
+                phase = Phase.Error,
+                error = failure.message ?: failure.toString(),
+                busy = false,
+            )
         }
     }
 
@@ -471,6 +524,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         halfSize: Boolean,
         decodeJson: JSONObject?,
         restoreEdits: Boolean,
+    initial: JSONObject? = null,
     ): EngineSession {
         val engine = client ?: throw EngineException(-1, "engine not created")
         engine.closeSession()
@@ -480,6 +534,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val delta = JSONObject().apply {
             put("preview_long_edge", previewLongEdge)
             decodeJson?.let { put("decode", it) }
+        // A stock change rebuilds the session, so every other parameter has
+        // to travel with it or the reopen would reset the picture to defaults.
+        initial?.let { params -> params.keys().forEach { key -> put(key, params.get(key)) } }
         }
         val opened = descriptor.use { engine.open(it.detachFd(), displayName, halfSize, delta) }
         session = opened
