@@ -55,7 +55,8 @@ data class Stocks(
     }
 
     /** The paper this film was measured against, when it names one. */
-    fun targetPrintFor(film: String): String? = filmInfo[film]?.targetPrint?.takeIf { it.isNotBlank() }
+    fun targetPrintFor(film: String): String? = filmInfo[film]?.targetPrint
+        ?.takeIf { it.isNotBlank() && it != "null" }
 
     /** `Kodak Kodachrome 64` for the wire id, or the id when the profile is unreadable. */
     fun displayNameOf(film: String): String = filmInfo[film]?.name?.takeIf { it.isNotBlank() } ?: film
@@ -110,7 +111,10 @@ object StockCatalog {
                 type = info.optString("type"),
                 support = info.optString("support"),
                 stage = info.optString("stage"),
-                targetPrint = info.optString("target_print"),
+                // `optString` answers the *string* "null" for a JSON null, and a
+                // stock id of "null" makes the engine look for `profiles/null.json`
+                // — which fails the whole open, not just the pairing.
+                targetPrint = if (info.isNull("target_print")) "" else info.optString("target_print"),
             )
         }
         return out

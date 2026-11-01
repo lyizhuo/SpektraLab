@@ -114,6 +114,17 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private var currentName: String = "photo"
     private var geometry: JSONObject = JSONObject()
 
+    /**
+     * Every edit the user has made, as a **flat** wire delta.
+     *
+     * `params` from the engine is a nested document (`camera.{...}`), and the
+     * wire delta is flat: `validate_delta` looks every top-level key up in the
+     * schema, so replaying `params` as a delta is rejected wholesale. A stock
+     * change has to re-open the session, and it needs the edits in the form the
+     * open takes — hence this, maintained beside them.
+     */
+    private var wireEdits: JSONObject = JSONObject()
+
     val isEngineReady: Boolean get() = _state.value.phase != Phase.Booting
 
     fun boot() {
@@ -161,6 +172,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 currentUri = uri
                 currentName = displayName
                 undoStack.clear()
+                wireEdits = JSONObject()
                 val opened = openSession(uri, displayName, halfSize, decodeJson, restoreEdits = true)
                 _state.value = _state.value.copy(
                     source = Source(uri, displayName, opened.width, opened.height, opened.metadata),
@@ -209,6 +221,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 // have needed. `UndoStack` was never the problem.
                 undoStack.record(before, fields, System.currentTimeMillis())
                 val params = opened.setParams(delta)
+                rememberWireEdits(delta)
                 geometry = params.filterGeometry()
                 _state.value = _state.value.copy(
                     params = params,
@@ -234,14 +247,44 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
      * geometry — the exact class of bug that made one film work and the rest
      * look wrong.
      */
+    /**
+     * Records a flat delta so a later re-open can replay it.
+     *
+     * A null is *removed*, not stored: `JSONObject.NULL` serialises to the
+     * literal `null`, and the engine resolves a stock by opening
+     * `profiles/<name>.json` — replaying `{"film_stock": null}` asks it for
+     * `profiles/null.json` and the whole open fails.
+     */
+    private fun rememberWireEdits(delta: JSONObject) {
+        delta.keys().forEach { key ->
+            val value = delta.opt(key)
+            if (value == null || value === JSONObject.NULL) {
+                wireEdits.remove(key)
+            } else {
+                wireEdits.put(key, value)
+            }
+        }
+    }
     private suspend fun reopenForStock(delta: JSONObject, resumeTier: String) {
         val uri = currentUri ?: return
         val name = currentName ?: return
         try {
             _state.value = _state.value.copy(phase = Phase.Opening, busy = true, error = null)
-            val merged = JSONObject((_state.value.params ?: JSONObject()).toString())
+            val merged = JSONObject(wireEdits.toString())
+            delta.keys().forEach { key ->
+                val value = delta.opt(key)
+                if (value != null && value !== JSONObject.NULL) merged.put(key, value)
+            }
+            // A stock id of `null` or "" is worse than no stock: it makes the
+            // engine look for `profiles/null.json`.
+            listOf("film_stock", "print_stock").forEach { key ->
+                val id = merged.optString(key)
+                if (id.isEmpty() || id == "null") merged.remove(key)
+            }
             delta.keys().forEach { key -> merged.put(key, delta.get(key)) }
+            android.util.Log.i("SpektraLab", "stock reopen merged=" + merged)
             val reopened = openSession(uri, name, true, null, restoreEdits = false, initial = merged)
+            rememberWireEdits(delta)
             android.util.Log.i(
                 "SpektraLab",
                 "stock reopen: delta=" + delta + " -> params film=" +
@@ -543,6 +586,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         if (restoreEdits) {
             editStore.load(uri)?.let { stored ->
                 if (stored.params.length() > 0) opened.setParams(stored.params)
+            if (stored.params.length() > 0) rememberWireEdits(stored.params)
                 geometry = stored.geometry
                 previewLongEdge = stored.ui.optInt("preview_long_edge", previewLongEdge)
             }
