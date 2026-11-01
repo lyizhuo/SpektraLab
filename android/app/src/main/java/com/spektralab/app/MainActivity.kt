@@ -362,7 +362,7 @@ class MainActivity : ComponentActivity() {
                                         papers = stocks.prints,
                                         illuminants = stocks.illuminants,
                                         filmStock = state.params?.optString("film_stock"),
-                                        paperStock = state.params?.optString("paper_stock"),
+                                        paperStock = state.params?.optString("print_stock"),
                                         illuminant = state.params?.optString("enlarger_illuminant"),
                                 onPickFilm = { film ->
                                     // A stock is measured against a particular

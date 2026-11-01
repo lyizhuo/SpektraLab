@@ -492,7 +492,7 @@ private fun filmEdgeName(state: UiState): String {
 
 private fun filmLine(state: UiState): String {
     val film = filmOf(state)
-    val paper = state.params?.optString("paper_stock")?.takeIf { it.isNotEmpty() }
+    val paper = state.params?.optString("print_stock")?.takeIf { it.isNotEmpty() }
     return listOfNotNull(film?.let(::stockLabel), paper?.let(::stockLabel))
         .joinToString(" · ")
         .ifEmpty { "未选择胶片" }
