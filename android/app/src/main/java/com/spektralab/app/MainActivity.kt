@@ -25,9 +25,32 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.lifecycleScope
-import com.spektralab.app.ui.EditorScreen
-import com.spektralab.app.ui.StripEntry
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.spektralab.app.EditorViewModel.Phase
+import com.spektralab.app.export.ExportTarget
+import com.spektralab.app.ui.StockCatalog
+import com.spektralab.app.ui.Stocks
+import com.spektralab.app.ui.screens.batch.BatchScreen
+import com.spektralab.app.ui.screens.importing.ImportRow
+import com.spektralab.app.ui.screens.importing.ImportScreen
+import com.spektralab.app.ui.screens.editor.CropSheet
+import com.spektralab.app.ui.screens.editor.EditorScreen
+import com.spektralab.app.ui.screens.editor.EditorTool
+import com.spektralab.app.ui.screens.editor.FilmSheet
+import com.spektralab.app.ui.screens.editor.ParamsSheet
+import com.spektralab.app.ui.screens.editor.StripEntry
+import com.spektralab.app.ui.screens.editor.frameNumber
+import com.spektralab.app.ui.screens.editor.stockOf
+import com.spektralab.app.ui.screens.export.ExportScreen
+import com.spektralab.app.ui.theme.Tokens
+import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -46,17 +69,56 @@ class MainActivity : ComponentActivity() {
      */
     private val strip = mutableStateListOf<StripEntry>()
 
+    /** The export page's chosen folder, remembered for the run. */
+    private var exportDirectory: Uri? = null
+
+    /** A5's aspect pill, kept on the screen rather than the engine. */
+    private var aspect by mutableStateOf("原始")
+
+    /** C2's rows while an import is running, and whether that screen is up. */
+    private var importRows by mutableStateOf<List<ImportRow>>(emptyList())
+    private var importOpen by mutableStateOf(false)
+
+    /** B1 is up when a batch arrived; the set is the frames it carries. */
+    private var batchUris by mutableStateOf<List<Uri>>(emptyList())
+    private var batchOpen by mutableStateOf(false)
+    private var batchSelected by mutableStateOf<Set<Int>>(emptySet())
+    /** 拷贝's clipboard, in the process only — it is not a file. */
+    private var copiedParams by mutableStateOf<JSONObject?>(null)
+    private var batchNote by mutableStateOf<String?>(null)
+
     /** Where the export page's `ACTION_OPEN_DOCUMENT_TREE` result goes. */
     private var exportDirectoryCallback: ((Uri) -> Unit)? = null
 
     private val pickImages = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        for (uri in uris) {
+        val picked = uris.distinct()
+        if (picked.isEmpty()) return@registerForActivityResult
+        for (uri in picked) {
             runCatching {
                 contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             addToStrip(uri)
         }
-        uris.lastOrNull()?.let { viewModel.open(it, nameOf(it)) }
+        // C2 draws one row per file with its own state, so the import has to be
+        // a sequence the user can watch rather than a loop that ends on the
+        // last file. Each row settles when its own `open` reaches Ready.
+        importRows = picked.map { ImportRow(nameOf(it), ImportRow.State.Waiting) }
+        importOpen = true
+        lifecycleScope.launch {
+            picked.forEachIndexed { index, uri ->
+                importRows = importRows.toMutableList().also {
+                    it[index] = it[index].copy(state = ImportRow.State.Working)
+                }
+                viewModel.open(uri, nameOf(uri))
+                val settled = viewModel.state.first { it.phase == Phase.Ready || it.phase == Phase.Error }
+                importRows = importRows.toMutableList().also {
+                    it[index] = it[index].copy(
+                        state = if (settled.phase == Phase.Ready) ImportRow.State.Done else ImportRow.State.Waiting,
+                    )
+                }
+            }
+            importOpen = false
+        }
     }
 
     private val pickFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -99,33 +161,156 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         viewModel.boot()
         openFromIntent(intent)
+
+        @Suppress("DEPRECATION")
+        val batch = intent?.getStringArrayListExtra(EXTRA_BATCH)?.map(Uri::parse).orEmpty()
+        if (batch.isNotEmpty()) {
+            batchUris = batch
+            batchSelected = batch.indices.toSet()
+            batchOpen = true
+        }
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    Box(Modifier.fillMaxSize()) {
-                        EditorScreen(
-                            viewModel = viewModel,
-                            strip = strip,
-                            onAddPhotos = { pickImages.launch(IMAGE_TYPES) },
-                            onAddFolder = {
-                                exportDirectoryCallback = null
-                                pickFolder.launch(null)
+            MaterialTheme(colorScheme = darkColorScheme(background = Tokens.Ground)) {
+                Surface(modifier = Modifier.fillMaxSize(), color = Tokens.Ground) {
+                    val state by viewModel.state.collectAsState()
+                    var tool by remember { mutableStateOf<EditorTool?>(null) }
+                    var exportOpen by remember { mutableStateOf(false) }
+                    var selected by remember { mutableStateOf(0) }
+                    var stocks by remember { mutableStateOf(Stocks()) }
+                    var directoryLabel by remember { mutableStateOf<String?>(null) }
+
+                    LaunchedEffect(Unit) {
+                        stocks = runCatching { StockCatalog.load(this@MainActivity) }.getOrDefault(Stocks())
+                    }
+
+                    if (batchOpen) {
+                        BatchScreen(
+                            strip = batchUris.mapIndexed { index, uri -> StripEntry(uri, nameOf(uri)) },
+                            selected = batchSelected,
+                            bitmap = state.bitmap,
+                            stockLabel = stockOf(state),
+                            frameNumber = frameNumber(state.source?.name ?: ""),
+                            onToggle = { index ->
+                                batchSelected = if (index in batchSelected) batchSelected - index else batchSelected + index
                             },
-                            onPickExportDirectory = { onPicked ->
-                                exportDirectoryCallback = onPicked
-                                pickFolder.launch(null)
+                            onExit = {
+                                batchOpen = false
+                                batchSelected = emptySet()
+                            },
+                            onCopy = {
+                                copiedParams = state.params
+                                batchNote = "已拷贝当前设置"
+                            },
+                            onPaste = {
+                                copiedParams?.let { viewModel.setParams(it) }
+                                batchNote = if (copiedParams == null) "还没有拷贝任何设置" else "已粘贴到当前照片"
+                            },
+                            onSync = { groups ->
+                                val source = copiedParams ?: state.params
+                                batchNote = if (source == null) "还没有可复制的设置" else null
+                                if (source != null) {
+                                    val targets = batchSelected.sorted()
+                                        .mapNotNull { batchUris.getOrNull(it) }
+                                    lifecycleScope.launch {
+                                        var done = 0
+                                        for (uri in targets) {
+                                            viewModel.open(uri, nameOf(uri))
+                                            viewModel.state.first {
+                                                it.phase == Phase.Ready || it.phase == Phase.Error
+                                            }
+                                            viewModel.setParams(syncDelta(source, groups))
+                                            done++
+                                        }
+                                        batchNote = "已同步到 $done 张"
+                                    }
+                                }
+                            },
+                            onExport = { exportOpen = true },
+                        )
+                    } else if (importOpen) {
+                        ImportScreen(
+                            rows = importRows,
+                            preview = state.bitmap,
+                            onCancel = {
+                                importOpen = false
+                                importRows = emptyList()
                             },
                         )
-
-                        // C1 owns the camera now (its 相机 button), which is
-                        // where the prototype puts it. The floating button was
-                        // a placeholder for exactly this and is gone with the
-                        // screen that replaced it.
+                    } else if (exportOpen) {
+                        ExportScreen(
+                            state = state,
+                            exportCount = strip.size.coerceAtLeast(1),
+                            directoryLabel = directoryLabel,
+                            onClose = { exportOpen = false },
+                            onPickDirectory = {
+                                exportDirectoryCallback = { picked ->
+                                    directoryLabel = picked.lastPathSegment?.substringAfterLast(':')
+                                }
+                                pickFolder.launch(null)
+                            },
+                            onExport = { spec ->
+                                viewModel.export(spec, ExportTarget.Directory, exportDirectory)
+                            },
+                        )
+                    } else {
+                        EditorScreen(
+                            state = state,
+                            strip = strip,
+                            selectedIndex = selected,
+                            onSelectFrame = { index ->
+                                selected = index
+                                strip.getOrNull(index)?.let { entry ->
+                                    viewModel.open(entry.uri, entry.name)
+                                }
+                            },
+                            onOpenPhotos = { pickImages.launch(IMAGE_TYPES) },
+                            onClose = { finish() },
+                            onTool = { tool = it },
+                            tool = tool,
+                            onExport = { exportOpen = true },
+                            sheet = {
+                                when (tool) {
+                                    EditorTool.Film -> FilmSheet(
+                                        films = stocks.films,
+                                        papers = stocks.prints,
+                                        filmStock = state.params?.optString("film_stock"),
+                                        paperStock = state.params?.optString("paper_stock"),
+                                        onPickFilm = { viewModel.setParams(JSONObject().put("film_stock", it)) },
+                                        onPickPaper = { viewModel.setParams(JSONObject().put("paper_stock", it)) },
+                                        onDismiss = { tool = null },
+                                    )
+                                    EditorTool.Params -> ParamsSheet(
+                                        params = state.params,
+                                        onSetNumber = { key, value ->
+                                            viewModel.setParams(nestedDelta(key, value))
+                                        },
+                                        onDismiss = { tool = null },
+                                    )
+                                    EditorTool.Crop -> CropSheet(
+                                        aspect = aspect,
+                                        onAspect = { label -> aspect = label; viewModel.setParams(aspectDelta(label)) },
+                                        onRotate = { clockwise ->
+                                            viewModel.setParams(JSONObject().put("geometry_quarter_turns", if (clockwise) 3 else 1))
+                                        },
+                                        onFlip = { horizontal ->
+                                            viewModel.setParams(
+                                                JSONObject().put(
+                                                    if (horizontal) "geometry_flip_h" else "geometry_flip_v",
+                                                    true,
+                                                ),
+                                            )
+                                        },
+                                        onDismiss = { tool = null },
+                                    )
+                                    null -> Unit
+                                }
+                            },
+                        )
                     }
                 }
             }
         }
-    }
+        }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
@@ -189,6 +374,14 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         openFromIntent(intent)
+
+        @Suppress("DEPRECATION")
+        val batch = intent?.getStringArrayListExtra(EXTRA_BATCH)?.map(Uri::parse).orEmpty()
+        if (batch.isNotEmpty()) {
+            batchUris = batch
+            batchSelected = batch.indices.toSet()
+            batchOpen = true
+        }
     }
 
     private fun String.extension(): String = substringAfterLast('.', "").lowercase()
@@ -205,6 +398,9 @@ class MainActivity : ComponentActivity() {
          */
         const val EXTRA_OPEN_URI = "com.spektralab.app.OPEN_URI"
 
+        /** B1's door: the frames that arrived already selected. */
+        const val EXTRA_BATCH = "com.spektralab.app.BATCH"
+
         /** Plan S5 item 1's traversal list. */
         val RAW_EXTENSIONS = setOf(
             "arw", "nef", "cr2", "cr3", "dng", "raf", "orf", "rw2", "pef",
@@ -214,4 +410,68 @@ class MainActivity : ComponentActivity() {
         /** Plan S5's LRU ceiling for the thumbnail wall. */
         const val STRIP_LIMIT = 256
     }
+}
+
+/**
+ * Turns `film.grain_amount` into `{"film": {"grain_amount": …}}`.
+ *
+ * The sheet asks for a leaf by whichever name the engine exposes; the wire is
+ * nested, and a flat `put("film.grain_amount", …)` is a key the engine has
+ * never heard of — it would be accepted and silently do nothing.
+ */
+private fun nestedDelta(key: String, value: Double): JSONObject {
+    val dot = key.indexOf('.')
+    return if (dot < 0) {
+        JSONObject().put(key, value)
+    } else {
+        JSONObject().put(key.substring(0, dot), JSONObject().put(key.substring(dot + 1), value))
+    }
+}
+
+/** A5's aspect pills, as the normalised crop the engine takes. */
+private fun aspectDelta(label: String): JSONObject {
+    val ratio = when (label) {
+        "1:1" -> 1.0
+        "3:2" -> 3.0 / 2.0
+        "4:3" -> 4.0 / 3.0
+        "16:9" -> 16.0 / 9.0
+        else -> 0.0
+    }
+    val delta = JSONObject()
+    if (ratio <= 0.0) {
+        delta.put("geometry_crop_x", 0.0).put("geometry_crop_y", 0.0)
+            .put("geometry_crop_w", 1.0).put("geometry_crop_h", 1.0)
+        return delta
+    }
+    // Centre the crop: the longest span the ratio allows, symmetric about the
+    // middle, which is what the frame's crop box draws.
+    val width = if (ratio >= 1.0) 1.0 else ratio
+    val height = if (ratio >= 1.0) 1.0 / ratio else 1.0
+    delta.put("geometry_crop_x", (1.0 - width) / 2.0)
+        .put("geometry_crop_y", (1.0 - height) / 2.0)
+        .put("geometry_crop_w", width)
+        .put("geometry_crop_h", height)
+    return delta
+}
+
+/**
+ * The groups B1's checkboxes carry, as wire keys.
+ *
+ * A group with no entry here is one the wire has no name for yet. That is not
+ * a reason to silently pretend: [BatchScreen] lists six groups and this maps
+ * four of them, so a sync reports how many frames it wrote rather than
+ * claiming all six travelled.
+ */
+private fun syncDelta(source: JSONObject, groups: Set<String>): JSONObject {
+    val delta = JSONObject()
+    fun copy(vararg keys: String) {
+        for (key in keys) {
+            if (source.has(key)) delta.put(key, source.get(key))
+        }
+    }
+    if ("胶片与相纸" in groups) copy("film_stock", "paper_stock")
+    if ("曝光" in groups) copy("exposure_compensation_ev")
+    if ("白平衡" in groups) copy("white_balance_k", "tint")
+    if ("胶片效果" in groups) copy("grain_amount", "halation_amount")
+    return delta
 }

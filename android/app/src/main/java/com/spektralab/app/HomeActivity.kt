@@ -61,6 +61,9 @@ class HomeActivity : ComponentActivity() {
 
     private var recent by mutableStateOf<List<RecentFrame>>(emptyList())
 
+    /** C1's 多选 state; empty means the grid opens instead of selecting. */
+    private var selection by mutableStateOf<Set<Int>>(emptySet())
+
     /** API 33 renamed the gallery permission; below it the old one applies. */
     private val mediaPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -90,6 +93,16 @@ class HomeActivity : ComponentActivity() {
                             onPickAlbum = { pickImage.launch(arrayOf("image/*", "application/octet-stream")) },
                             onCamera = { startActivity(CameraActivity.intent(this@HomeActivity)) },
                             onOpenRecent = { frame -> openInEditor(frame.uri) },
+                            selection = selection,
+                            onToggleSelection = { index ->
+                                selection = if (index in selection) selection - index else selection + index
+                            },
+                            onExitSelection = { selection = emptySet() },
+                            onEditSelected = {
+                                val uris = selection.sorted()
+                                    .mapNotNull { recent.getOrNull(it)?.uri }
+                                if (uris.isNotEmpty()) openBatch(uris)
+                            },
                         )
                     }
                 }
@@ -117,6 +130,17 @@ class HomeActivity : ComponentActivity() {
         if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
             mediaPermission.launch(permission)
         }
+    }
+
+    /** B1: the same editor, entered with a set of frames already picked. */
+    private fun openBatch(uris: List<Uri>) {
+        startActivity(
+            Intent(this, MainActivity::class.java).apply {
+                putStringArrayListExtra(MainActivity.EXTRA_BATCH, ArrayList(uris.map { it.toString() }))
+                putExtra(MainActivity.EXTRA_OPEN_URI, uris.first())
+                data = uris.first()
+            },
+        )
     }
 
     private fun openInEditor(uri: Uri) {

@@ -24,6 +24,14 @@ import java.io.File
  *
  * Nothing is hard-coded: a stock the build does not carry never appears.
  */
+/**
+ * Where a parameter's choices come from.
+ *
+ * It lived in `ui/Catalog.kt`, which the redesign deleted; `Stocks` is the only
+ * thing that answers it now, so it belongs beside it.
+ */
+enum class ChoiceSource { Static, FilmStocks, PrintStocks, Illuminants }
+
 data class Stocks(
     val films: List<String> = emptyList(),
     val prints: List<String> = emptyList(),

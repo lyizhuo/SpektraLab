@@ -90,6 +90,10 @@ fun HomeScreen(
     onCamera: () -> Unit,
     onOpenRecent: (RecentFrame) -> Unit,
     onSearch: () -> Unit = {},
+    selection: Set<Int> = emptySet(),
+    onToggleSelection: (Int) -> Unit = {},
+    onExitSelection: () -> Unit = {},
+    onEditSelected: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val current = rolls.firstOrNull { !it.isFull } ?: rolls.firstOrNull()
@@ -139,10 +143,11 @@ fun HomeScreen(
                     RollTiles(rolls = rolls, onOpenRoll = onOpenRoll)
                 }
                 SectionHeader(
-                    title = "最近照片",
-                    trailing = "选择",
+                    title = if (selection.isEmpty()) "最近照片" else "已选 ${selection.size} 张",
+                    trailing = if (selection.isEmpty()) "选择" else "退出",
                     trailingColor = Tokens.Accent,
                     y = 477.dp - lifted,
+                    onTrailing = if (selection.isEmpty()) null else onExitSelection,
                 )
                 if (recent.isEmpty()) {
                     Text(
@@ -155,7 +160,14 @@ fun HomeScreen(
                         modifier = Modifier.offset(x = 20.dp, y = 505.dp - lifted),
                     )
                 } else {
-                    RecentGrid(recent = recent, onOpen = onOpenRecent)
+                    RecentGrid(
+                        recent = recent,
+                        onOpen = { frame ->
+                            val index = recent.indexOf(frame)
+                            if (selection.isEmpty()) onOpenRecent(frame) else onToggleSelection(index)
+                        },
+                        selection = selection,
+                    )
                 }
                 Text(
                     text = "支持 RAW · TIFF · JPEG · HEIF",
@@ -164,7 +176,11 @@ fun HomeScreen(
                 )
                 }
             }
-            BottomActions(onPickAlbum = onPickAlbum, onCamera = onCamera)
+            if (selection.isEmpty()) {
+                BottomActions(onPickAlbum = onPickAlbum, onCamera = onCamera)
+            } else {
+                SelectionActions(count = selection.size, onEdit = onEditSelected, onExit = onExitSelection)
+            }
         }
     }
 }
@@ -294,6 +310,7 @@ private fun SectionHeader(
     trailing: String,
     y: Dp,
     trailingColor: Color = Tokens.InkSecondary,
+    onTrailing: (() -> Unit)? = null,
 ) {
     Text(
         text = title,
@@ -307,7 +324,13 @@ private fun SectionHeader(
             .padding(end = 20.dp),
         contentAlignment = Alignment.TopEnd,
     ) {
-        Text(text = trailing, style = TextStyle(fontFamily = Tokens.Sans, fontSize = 10.sp, color = trailingColor))
+        Text(
+            text = trailing,
+            style = TextStyle(fontFamily = Tokens.Sans, fontSize = 10.sp, color = trailingColor),
+            modifier = Modifier
+                .then(if (onTrailing != null) Modifier.clickable(onClick = onTrailing) else Modifier)
+                .testTag("home-trailing"),
+        )
     }
 }
 
@@ -368,7 +391,7 @@ private fun RollTiles(rolls: List<Roll>, onOpenRoll: (Roll) -> Unit) {
 }
 
 @Composable
-private fun RecentGrid(recent: List<RecentFrame>, onOpen: (RecentFrame) -> Unit) {
+private fun RecentGrid(recent: List<RecentFrame>, onOpen: (RecentFrame) -> Unit, selection: Set<Int> = emptySet()) {
     val columns = listOf(20.dp, 144.dp, 268.dp)
     recent.take(6).forEachIndexed { index, frame ->
         val x = columns[index % 3]
@@ -383,7 +406,23 @@ private fun RecentGrid(recent: List<RecentFrame>, onOpen: (RecentFrame) -> Unit)
                 .testTag("home-recent-${frame.name}"),
         ) {
             Thumbnail(frame.uri)
-            if (index == 0) {
+            if (index in selection) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(18.dp)
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(Tokens.Accent),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "✓",
+                        style = TextStyle(fontFamily = Tokens.Sans, fontSize = 10.sp, color = Tokens.Ground),
+                    )
+                }
+            }
+            if (index == 0 && selection.isEmpty()) {
                 Box(
                     Modifier
                         .offset(x = 8.dp, y = 8.dp)
@@ -526,5 +565,33 @@ private fun rollLabel(roll: Roll): String {
             val calendar = java.util.Calendar.getInstance().apply { timeInMillis = roll.createdAtMillis }
             "${calendar.get(java.util.Calendar.MONTH) + 1}月${calendar.get(java.util.Calendar.DAY_OF_MONTH)}日"
         }
+    }
+}
+
+/** C1's bottom bar once something is selected: one action, and the way out. */
+@Composable
+private fun SelectionActions(count: Int, onEdit: () -> Unit, onExit: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(129.dp)
+            .background(Tokens.Bar)
+            .testTag("home-selection-actions"),
+    ) {
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Tokens.Hairline))
+        AccentButton(
+            label = "编辑 $count 张",
+            icon = {},
+            onClick = onEdit,
+            x = 20.dp,
+            tag = "home-edit-selected",
+        )
+        GhostButton(
+            label = "退出",
+            icon = {},
+            onClick = onExit,
+            x = 218.dp,
+            tag = "home-exit-selection",
+        )
     }
 }
