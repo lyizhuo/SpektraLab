@@ -261,7 +261,7 @@ private fun Viewfinder(
     scope: CoroutineScope,
     context: Context,
 ) {
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize().clipToBounds()) {
         // The surface is not valid on the first composition, and `update` is the
         // only place the open is attempted: without a signal from the holder the
         // screen stayed black with no error at all. This token is that signal.
@@ -291,7 +291,7 @@ private fun Viewfinder(
         val bufferAspect = buffer.width.toFloat() / buffer.height.toFloat()
         val containerAspect = maxWidth / maxHeight
         val preview = if (containerAspect < bufferAspect) {
-            Modifier.fillMaxHeight().aspectRatio(bufferAspect)
+            Modifier.fillMaxHeight().aspectRatio(bufferAspect, matchHeightConstraintsFirst = true)
         } else {
             Modifier.fillMaxWidth().aspectRatio(bufferAspect)
         }
