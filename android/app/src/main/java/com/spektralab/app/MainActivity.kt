@@ -98,6 +98,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewModel.boot()
+        openFromIntent(intent)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -116,20 +117,10 @@ class MainActivity : ComponentActivity() {
                             },
                         )
 
-                        // C3's door. It floats over the editor for now because
-                        // the prototype's home (C1) does not exist yet; when it
-                        // does, this moves onto that screen's 相机 button and
-                        // stops overlapping the canvas.
-                        ExtendedFloatingActionButton(
-                            onClick = { launchCamera.launch(CameraActivity.intent(this@MainActivity)) },
-                            containerColor = CameraAccent,
-                            contentColor = androidx.compose.ui.graphics.Color.Black,
-                            modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .padding(20.dp),
-                            text = { Text("相机") },
-                            icon = { Icon(Icons.Filled.PhotoCamera, contentDescription = null) },
-                        )
+                        // C1 owns the camera now (its 相机 button), which is
+                        // where the prototype puts it. The floating button was
+                        // a placeholder for exactly this and is gone with the
+                        // screen that replaced it.
                     }
                 }
             }
@@ -172,10 +163,47 @@ class MainActivity : ComponentActivity() {
         return found
     }
 
+    /**
+     * Opens the photograph an Intent named, if it named one.
+     *
+     * Reached from C1 — its import pill and its 最近照片 tiles — and from
+     * nothing else yet. A URI that cannot be read is ignored rather than
+     * thrown: the caller is another screen of this app, and refusing to open
+     * the editor because one tile went stale would be worse than opening it
+     * empty.
+     */
+    private fun openFromIntent(intent: Intent?) {
+        if (intent == null) return
+        @Suppress("DEPRECATION")
+        val uri = intent.getParcelableExtra<Uri>(EXTRA_OPEN_URI) ?: intent.data ?: return
+        runCatching {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching {
+            addToStrip(uri)
+            viewModel.open(uri, nameOf(uri))
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        openFromIntent(intent)
+    }
+
     private fun String.extension(): String = substringAfterLast('.', "").lowercase()
 
-    private companion object {
+    companion object {
         val IMAGE_TYPES = arrayOf("image/*", "application/octet-stream")
+
+        /**
+         * Home's door into the editor: the content URI to open on arrival.
+         *
+         * C1's "从相册导入" and its 最近照片 tiles both mean "open *this*
+         * photograph", so the editor has to accept one. Until now it could only
+         * be told through its own picker.
+         */
+        const val EXTRA_OPEN_URI = "com.spektralab.app.OPEN_URI"
 
         /** Plan S5 item 1's traversal list. */
         val RAW_EXTENSIONS = setOf(
