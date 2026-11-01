@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import androidx.core.net.toUri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -79,6 +80,23 @@ class CameraActivity : ComponentActivity() {
                         captureDirectory = captureDir,
                         onCaptured = { file, readout -> finishWith(file, readout) },
                         onClose = { finish() },
+                // The thumbnail opens the frame just shot: it is the
+                // only door back into the library from here.
+                onOpenLast = {
+                    val latest = captureDir.listFiles()
+                        ?.filter { it.isFile }
+                        ?.maxByOrNull { it.lastModified() }
+                    if (latest == null) {
+                        finish()
+                    } else {
+                        startActivity(
+                            Intent(this@CameraActivity, MainActivity::class.java).apply {
+                                putExtra(MainActivity.EXTRA_OPEN_URI, latest.toUri())
+                                data = latest.toUri()
+                            },
+                        )
+                    }
+                },
                         filmLabel = stockLabel(current.filmStockId),
                         frameIndex = current.count,
                         frameCapacity = current.capacity,

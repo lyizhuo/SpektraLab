@@ -105,6 +105,7 @@ fun CameraScreen(
     captureDirectory: File,
     onCaptured: (File, String) -> Unit,
     onClose: () -> Unit,
+    onOpenLast: () -> Unit = {},
     filmLabel: String = "PORTRA 400",
     frameIndex: Int = 0,
     frameCapacity: Int = 36,
@@ -236,6 +237,7 @@ fun CameraScreen(
                         }
                     }
                 },
+                    onOpenLast = onOpenLast,
                 onFlip = { /* the plan's second lens, not a mirror flip */ },
             )
             Spacer(Modifier.height(8.dp))
@@ -295,7 +297,7 @@ private fun Viewfinder(
         val buffer = remember(selectedStop) {
             RawCameraSession.previewSizeFor(context, selectedStop.lens)
         }
-        val bufferAspect = raw.width.toFloat() / raw.height.toFloat()
+        val bufferAspect = buffer.width.toFloat() / buffer.height.toFloat()
         // Fit inside, never fill: the sensor's whole field is visible.
         val preview = Modifier
             .fillMaxSize()
@@ -463,6 +465,7 @@ private fun BottomControls(
     enabled: Boolean,
     onCapture: () -> Unit,
     onFlip: () -> Unit,
+    onOpenLast: () -> Unit = {},
 ) {
     Row(
         Modifier.fillMaxWidth(),
@@ -470,6 +473,7 @@ private fun BottomControls(
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Surface(
+            onClick = onOpenLast,
             shape = RoundedCornerShape(12.dp),
             color = Color(0xFF241D18),
             modifier = Modifier.size(54.dp).testTag("camera-thumb"),

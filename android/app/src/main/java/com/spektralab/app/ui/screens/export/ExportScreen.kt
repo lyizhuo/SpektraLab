@@ -42,6 +42,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -106,14 +107,18 @@ fun ExportScreen(
             item {
                 // A proof, not a canvas: the frame gives it a fixed slot so the
                 // numbers below it stay on screen whatever the picture's shape.
+                // A fixed slot with the picture centred inside it. A portrait
+                // proof and a landscape one both land in the same 260 dp band,
+                // so the numbers under it never move and never overlap — the
+                // first version let a 3:4 frame size itself and it covered them.
                 Box(
                     Modifier
-                        .fillMaxWidth(0.62f)
-                        .heightIn(max = 280.dp)
-                        .aspectRatio(if (width > 0 && height > 0) width.toFloat() / height else 3f / 2f)
+                        .fillMaxWidth()
+                        .height(260.dp)
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xFF0C0B0A))
                         .testTag("export-proof"),
+                    contentAlignment = Alignment.Center,
                 ) {
                     state.bitmap?.let {
                         Image(
