@@ -7,6 +7,9 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -51,6 +54,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
@@ -89,7 +93,6 @@ import com.spektralab.app.R
 import com.spektralab.app.ui.theme.Tokens
 import kotlin.math.roundToInt
 import androidx.compose.foundation.clickable
-import androidx.compose.ui.geometry.Offset
 
 /**
  * C3 — the camera.
@@ -386,11 +389,32 @@ private fun Viewfinder(
             .fillMaxSize()
             .wrapContentSize(Alignment.Center)
             .aspectRatio(bufferAspect, matchHeightConstraintsFirst = true)
-        AndroidView(
-            modifier = preview
+        // Tap to focus. The gesture sits on a wrapper, not on the SurfaceView:
+        // the surface is composited by the system and does not deliver touches
+        // to Compose.
+        var focusPoint by remember { mutableStateOf<Offset?>(null) }
+        LaunchedEffect(focusPoint) {
+            if (focusPoint != null) {
+                delay(1200)
+                focusPoint = null
+            }
+        }
+        Box(
+            preview
                 .align(Alignment.Center)
                 .clipToBounds()
+                .pointerInput(Unit) {
+                    detectTapGestures { offset ->
+                        val w = size.width.toFloat().coerceAtLeast(1f)
+                        val h = size.height.toFloat().coerceAtLeast(1f)
+                        openSession?.focusAt(offset.x / w, offset.y / h)
+                        focusPoint = offset
+                    }
+                }
                 .testTag("camera-preview"),
+        ) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
                 SurfaceView(ctx).apply {
                     holder.setFixedSize(buffer.width, buffer.height)
@@ -429,6 +453,22 @@ private fun Viewfinder(
                 }
             },
         )
+            // The reticle says the tap was received and where it landed. It is
+            // not decoration: without it a tap on a scene with no contrast looks
+            // exactly like a tap that never arrived.
+            focusPoint?.let { point ->
+                val half = with(LocalDensity.current) { 28.dp.toPx() }
+                Box(
+                    Modifier
+                        .offset {
+                            IntOffset((point.x - half).toInt(), (point.y - half).toInt())
+                        }
+                        .size(56.dp)
+                        .border(1.5.dp, Color.White, RoundedCornerShape(4.dp))
+                        .testTag("camera-focus-reticle"),
+                )
+            }
+        }
     }
 }
 

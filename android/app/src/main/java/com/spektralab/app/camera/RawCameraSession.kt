@@ -10,6 +10,7 @@ import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.DngCreator
 import android.hardware.camera2.TotalCaptureResult
+import android.hardware.camera2.params.MeteringRectangle
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
@@ -70,6 +71,9 @@ class RawCameraSession(
     private var pending: PendingCapture? = null
     private var capturing = false
     private var torchOn = false
+
+    /** Where the user last tapped, in sensor coordinates; null = the centre. */
+    private var afRegion: MeteringRectangle? = null
 
     /** The DNG's frame size. */
     var rawSize: Size = Size(0, 0)
@@ -202,7 +206,37 @@ class RawCameraSession(
     }
 
     /** Repeating request for the viewfinder, and the readout it implies. */
-    private fun startPreview() {
+    /**
+     * Tap to focus, and meter there too.
+     *
+     * `nx`/`ny` are normalised against the *displayed* preview, which in
+     * portrait is the sensor turned a quarter turn: screen x runs along the
+     * sensor's y, and screen y runs backwards along its x. Getting that map
+     * wrong focuses somewhere the user did not touch, which reads as "focus is
+     * broken" rather than "the maths is broken".
+     */
+    fun focusAt(nx: Float, ny: Float) {
+        val chars = characteristics ?: return
+        val active = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
+        val w = active.width().toFloat()
+        val h = active.height().toFloat()
+        val sx = ny.coerceIn(0f, 1f) * w
+        val sy = (1f - nx.coerceIn(0f, 1f)) * h
+        // 16 % of the short side: big enough to be a real subject, small enough
+        // that the reading is about what was tapped.
+        val side = minOf(w, h) * 0.16f
+        val left = (sx - side / 2f).coerceIn(0f, w - side)
+        val top = (sy - side / 2f).coerceIn(0f, h - side)
+        afRegion = MeteringRectangle(
+            left.toInt(),
+            top.toInt(),
+            side.toInt(),
+            side.toInt(),
+            MeteringRectangle.METERING_WEIGHT_MAX,
+        )
+        startPreview(triggerAf = true)
+    }
+    private fun startPreview(triggerAf: Boolean = false) {
         val d = device ?: return
         val s = session ?: return
         val target = previewSurface ?: return
@@ -210,6 +244,14 @@ class RawCameraSession(
             addTarget(target)
             set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
             set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            afRegion?.let { region ->
+                set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(region))
+                set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(region))
+            }
+            if (triggerAf) {
+                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
+            }
             set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposureCompensation)
             set(
                 CaptureRequest.FLASH_MODE,
