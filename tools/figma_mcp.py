@@ -12,6 +12,7 @@ request; without it the server starts a fresh session and the call fails with
 never printed.
 """
 
+import base64
 import json
 import os
 import sys
@@ -143,8 +144,11 @@ def main() -> int:
 
     if command == "call":
         if len(sys.argv) < 4:
-            sys.exit("usage: figma_mcp.py call <tool> '<json>'")
+            sys.exit("usage: figma_mcp.py call <tool> '<json>' [--out <path>]")
         arguments = json.loads(sys.argv[3])
+        out_path = None
+        if "--out" in sys.argv:
+            out_path = Path(sys.argv[sys.argv.index("--out") + 1])
         reply, _ = post(
             {
                 "jsonrpc": "2.0",
@@ -168,6 +172,16 @@ def main() -> int:
             out.write_bytes(base64.b64decode(data))
             saved.append(str(out))
             item["data"] = f"<{len(data)} base64 chars written to {out}>"
+        # A redirect merges stdout and stderr into one file and the reply stops
+        # being JSON; --out keeps them apart and is what a caller should use.
+        if out_path is not None:
+            out_path.write_text(json.dumps(reply, ensure_ascii=False, indent=2), encoding="utf-8")
+            content_items = ((reply or {}).get("result") or {}).get("content") or []
+            chars = sum(len(item.get("text") or "") for item in content_items)
+            print(f"[out] {out_path} ({chars} chars of text, {len(content_items)} item(s))")
+            for path in saved:
+                print(f"[saved] {path}")
+            return 0
         print(json.dumps(reply, ensure_ascii=False, indent=2))
         for path in saved:
             print(f"[saved] {path}")
