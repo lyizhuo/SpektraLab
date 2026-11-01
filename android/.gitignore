@@ -9,3 +9,4 @@ local.properties
 # Screenshots are the operator's record of a device run, not build inputs
 # (android/screenshots/README.md explains how they are produced).
 screenshots/*.png
+tools/send_apk_config.json
