@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -201,67 +203,30 @@ fun TrackSlider(
     enabled: Boolean = true,
     centerTick: Boolean = false,
 ) {
-    val span = valueRange.endInclusive - valueRange.start
-    val fraction = if (span <= 0f) 0f else ((value - valueRange.start) / span).coerceIn(0f, 1f)
-    val knob = 12.dp
-
-    Canvas(
-        modifier
-            .fillMaxWidth()
-            .height(knob)
-            // Two pointer nodes rather than one: a tap and a drag arrive through
-            // different detectors, and both need the same mapping from an x
-            // coordinate to a value. That mapping uses the knob's inset so the
-            // knob lands under the finger at both ends of the track.
-            .pointerInput(enabled, valueRange) {
-                if (enabled) detectTapGestures { at -> onValueChange(valueAt(at.x, size.width, knob.toPx(), valueRange)) }
-            }
-            .pointerInput(enabled, valueRange) {
-                if (enabled) {
-                    detectHorizontalDragGestures(
-                        onDragStart = { at -> onValueChange(valueAt(at.x, size.width, knob.toPx(), valueRange)) },
-                        onHorizontalDrag = { change, _ ->
-                            onValueChange(valueAt(change.position.x, size.width, knob.toPx(), valueRange))
-                        },
-                    )
-                }
-            },
-    ) {
-        val inset = knob.toPx() / 2f
-        val usable = (size.width - 2 * inset).coerceAtLeast(1f)
-        val centerY = size.height / 2f
-        val trackColor = if (enabled) Tokens.Track else Tokens.Track.copy(alpha = 0.5f)
-        drawRect(
-            color = trackColor,
-            topLeft = Offset(inset, centerY - 1.dp.toPx()),
-            size = GeomSize(usable, 2.dp.toPx()),
-        )
-        val x = inset + usable * fraction
-        if (enabled) {
-            drawRect(
-                color = Tokens.Accent,
-                topLeft = Offset(inset, centerY - 1.dp.toPx()),
-                size = GeomSize((x - inset).coerceAtLeast(0f), 2.dp.toPx()),
-            )
-        }
-        if (centerTick) {
-            drawRect(
-                color = if (enabled) Tokens.InkTertiary else Tokens.Track,
-                topLeft = Offset(inset + usable / 2f - 0.5.dp.toPx(), centerY - 7.dp.toPx()),
-                size = GeomSize(1.dp.toPx(), 14.dp.toPx()),
-            )
-        }
-        drawCircle(
-            color = if (enabled) Tokens.Ink else Tokens.InkTertiary,
-            radius = knob.toPx() / 2f - 0.5.dp.toPx(),
-            center = Offset(x, centerY),
-        )
-        drawCircle(
-            color = if (enabled) Tokens.Accent else Tokens.InkTertiary,
-            radius = 2.dp.toPx(),
-            center = Offset(x, centerY),
-        )
-    }
+    // Material 3's `Slider`, not a hand-drawn Canvas.
+    //
+    // The Canvas version drew a correct track and mapped x to a value, and it
+    // never received a touch inside A3/A4's scrolling column: the tap and the
+    // drag were registered on a node the scroll container claimed first. Every
+    // parameter row therefore read as "not wired" while the wire was fine — the
+    // deltas were simply never produced. `Slider` owns its own gesture arena,
+    // its own 48 dp target and its own accessibility semantics, which is exactly
+    // the kind of thing not to re-implement.
+    Slider(
+        value = value,
+        onValueChange = onValueChange,
+        valueRange = valueRange,
+        enabled = enabled,
+        modifier = modifier.fillMaxWidth().height(44.dp),
+        colors = SliderDefaults.colors(
+            thumbColor = Tokens.Ink,
+            activeTrackColor = Tokens.Accent,
+            inactiveTrackColor = Tokens.Track,
+            disabledThumbColor = Tokens.InkTertiary,
+            disabledActiveTrackColor = Tokens.Track,
+            disabledInactiveTrackColor = Tokens.Track.copy(alpha = 0.5f),
+        ),
+    )
 }
 
 /**

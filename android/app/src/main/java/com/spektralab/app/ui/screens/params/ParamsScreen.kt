@@ -1,6 +1,9 @@
 package com.spektralab.app.ui.screens.params
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -77,6 +80,7 @@ import kotlin.math.sin
  */
 @Composable
 fun ParamsScreen(
+    bitmap: android.graphics.Bitmap?,
     params: JSONObject?,
     sourceName: String?,
     onDelta: (JSONObject) -> Unit,
@@ -92,6 +96,10 @@ fun ParamsScreen(
             .testTag("params"),
     ) {
         ParamsBar(sourceName = sourceName, onBack = onBack)
+        // The picture, live. A parameter page that hides the frame turns every
+        // slider into a blind guess: the engine was applying them all along and
+        // the user could not see it, which reads exactly like "nothing is wired".
+        PreviewStrip(bitmap = bitmap)
         Segment(after = after, onPick = { after = it })
         Column(
             Modifier
@@ -111,6 +119,32 @@ fun ParamsScreen(
     }
 }
 
+/**
+ * The frame, as the engine last rendered it.
+ *
+ * Fixed height, `Fit`, so the picture changes size only when the photograph's
+ * shape does — a preview that reflows on every edit makes the controls jump.
+ */
+@Composable
+private fun PreviewStrip(bitmap: android.graphics.Bitmap?) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(190.dp)
+            .background(Tokens.Ink.copy(alpha = 0.05f))
+            .testTag("params-preview"),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize().padding(6.dp),
+            )
+        }
+    }
+}
 /** The 52 dp bar: 参数 on the left, the file on the right. */
 @Composable
 private fun ParamsBar(sourceName: String?, onBack: () -> Unit) {
@@ -752,16 +786,32 @@ private fun formatSigned(value: Float, decimals: Int): String {
     return if (value > 0f && decimals > 0) "+$text" else text
 }
 
+/**
+ * The engine's own names, and only its names.
+ *
+ * `params.cpp` validates this field against a fixed list — balanced, center,
+ * protect_highlights, protect_shadows, center_weighted, average, median — and
+ * answers anything else with "'x' is not an exposure method". The page used to
+ * cycle through invented names, so **every** press of 测光 was rejected and the
+ * row never changed: the control was wired, and the wire refused it.
+ */
 private fun methodLabel(method: String): String = when (method) {
     "center_weighted" -> "均衡"
-    "highlight_weighted" -> "高光"
+    "protect_highlights" -> "保护高光"
+    "protect_shadows" -> "保护阴影"
+    "balanced" -> "平衡"
+    "center" -> "中央"
     "average" -> "平均"
+    "median" -> "中值"
     else -> "均衡"
 }
 
 private fun nextMethod(method: String): String = when (method) {
-    "center_weighted" -> "highlight_weighted"
-    "highlight_weighted" -> "average"
+    "center_weighted" -> "protect_highlights"
+    "protect_highlights" -> "protect_shadows"
+    "protect_shadows" -> "average"
+    "average" -> "median"
+    "median" -> "balanced"
     else -> "center_weighted"
 }
 

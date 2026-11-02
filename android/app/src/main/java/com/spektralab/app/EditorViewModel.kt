@@ -195,6 +195,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     /** Applies a wire delta and re-renders the current tier. */
     fun setParams(delta: JSONObject, resumeTier: String = _state.value.tier) {
+        android.util.Log.i("SpektraLab", "setParams " + delta)
         viewModelScope.launch {
             val opened = ensureSession() ?: return@launch
             // `film_stock` and `print_stock` are not parameters.
@@ -233,6 +234,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
+                android.util.Log.e("SpektraLab", "setParams failed", failure)
                 _state.value = _state.value.copy(error = failure.message ?: failure.toString())
             }
         }
@@ -329,6 +331,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
+                android.util.Log.e("SpektraLab", "setParams failed", failure)
                 _state.value = _state.value.copy(error = failure.message ?: failure.toString())
             }
         }

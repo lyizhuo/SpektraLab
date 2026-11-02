@@ -346,6 +346,7 @@ class MainActivity : ComponentActivity() {
                         )
                     } else if (tool == EditorTool.Params) {
                         ParamsScreen(
+                            bitmap = state.bitmap,
                             params = state.params,
                             sourceName = state.source?.name,
                             onDelta = { viewModel.setParams(it) },
