@@ -28,6 +28,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.LaunchedEffect
@@ -828,17 +830,20 @@ private fun ChoiceMenu(
     var open by remember { mutableStateOf(false) }
     val shown = options.firstOrNull { it.first == selected }?.second ?: options.first().second
 
-    Box {
-        Row(
-            Modifier.fillMaxWidth().padding(top = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                label,
-                style = Tokens.Type.RowLabel,
-                color = Tokens.InkSecondary,
-                modifier = Modifier.weight(1f),
-            )
+    // The menu anchors to its parent's layout node, so the `Box` wraps the pill
+    // and nothing else. Wrapping the whole row put the menu at the row's left
+    // edge, over the label — the row is full width.
+    Row(
+        Modifier.fillMaxWidth().padding(top = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = Tokens.Type.RowLabel,
+            color = Tokens.InkSecondary,
+            modifier = Modifier.weight(1f),
+        )
+        Box {
             Row(
                 Modifier
                     .width(160.dp)
@@ -860,27 +865,27 @@ private fun ChoiceMenu(
                     modifier = Modifier.size(12.dp),
                 )
             }
-        }
-        DropdownMenu(
-            expanded = open,
-            onDismissRequest = { open = false },
-            containerColor = Tokens.Pill,
-        ) {
-            options.forEach { (wire, text) ->
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            text = text,
-                            style = Tokens.Type.Segment,
-                            color = if (wire == selected) Tokens.Accent else Tokens.Ink,
-                        )
-                    },
-                    onClick = {
-                        open = false
-                        onPick(wire)
-                    },
-                    modifier = Modifier.testTag("$tag-$wire"),
-                )
+            DropdownMenu(
+                expanded = open,
+                onDismissRequest = { open = false },
+                containerColor = Tokens.Pill,
+            ) {
+                options.forEach { (wire, text) ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = text,
+                                style = Tokens.Type.Segment,
+                                color = if (wire == selected) Tokens.Accent else Tokens.Ink,
+                            )
+                        },
+                        onClick = {
+                            open = false
+                            onPick(wire)
+                        },
+                        modifier = Modifier.testTag("$tag-$wire"),
+                    )
+                }
             }
         }
     }
@@ -893,7 +898,18 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, style = Tokens.Type.RowLabel, color = Tokens.InkSecondary, modifier = Modifier.weight(1f))
-        SpektraSwitch(checked = checked, onCheckedChange = onChange, modifier = Modifier.testTag(tag))
+        Switch(
+            checked = checked,
+            onCheckedChange = onChange,
+            modifier = Modifier.testTag(tag),
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Tokens.Ink,
+                checkedTrackColor = Tokens.Accent,
+                uncheckedThumbColor = Tokens.InkTertiary,
+                uncheckedTrackColor = Tokens.Track,
+                uncheckedBorderColor = Tokens.Ink.copy(alpha = 0.15f),
+            ),
+        )
     }
 }
 
