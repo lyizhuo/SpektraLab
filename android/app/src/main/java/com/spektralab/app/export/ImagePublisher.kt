@@ -29,7 +29,10 @@ class ImagePublisher(private val context: Context) {
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
             put(MediaStore.Images.Media.MIME_TYPE, format.mime)
-            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/SpektraLab")
+        // The product is Latent. This said SpektraLab, so every export landed
+        // in Pictures/SpektraLab while the export page told the user
+        // Pictures/Latent — the one screen that promises where a file goes.
+        put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Latent")
             put(MediaStore.Images.Media.DATE_TAKEN, takenAtMillis)
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
