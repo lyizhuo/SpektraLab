@@ -28,6 +28,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -238,28 +241,18 @@ private fun BeforeContent(params: JSONObject?, onDelta: (JSONObject) -> Unit) {
         )
     })
 
-    ChoiceRow(
+    ChoiceMenu(
         label = "测光",
-        value = methodLabel(readString(params, "camera.auto_exposure_method", "center_weighted")),
-        onClick = {
-            // The wire is flat: `auto_exposure_method`, not `camera.{...}`.
-            // `validate_delta` looks every top-level key up in the schema, so a
-            // nested object under "camera" is an unknown field and the whole
-            // delta is rejected — the control looked wired and did nothing.
-            onDelta(
-                JSONObject().put(
-                    "auto_exposure_method",
-                    nextMethod(readString(params, "camera.auto_exposure_method", "center_weighted")),
-                ),
-            )
-        },
+        options = exposureMethods,
+        selected = readString(params, "camera.auto_exposure_method", "center_weighted"),
+        onPick = { onDelta(JSONObject().put("auto_exposure_method", it)) },
         tag = "params-metering",
     )
 
     SliderRow(
         label = "胶片曝光",
-        value = formatSigned(readNumber(params, "camera.exposure_compensation_ev", 0f), 1) + " EV",
-        value2 = readNumber(params, "camera.exposure_compensation_ev", 0f),
+        value = readNumber(params, "camera.exposure_compensation_ev", 0f),
+        format = { formatSigned(it, 1) + " EV" },
         range = -3f..3f,
         onChange = { onDelta(JSONObject().put("exposure_compensation_ev", it.toDouble())) },
         tag = "field-exposure_compensation_ev",
@@ -273,17 +266,11 @@ private fun BeforeContent(params: JSONObject?, onDelta: (JSONObject) -> Unit) {
 
     Spacer(Modifier.height(18.dp))
     GroupHeader("胶片画幅")
-    ChoiceRow(
+    ChoiceMenu(
         label = "画幅",
-        value = filmFormatLabel(readNumber(params, "film_format_mm", 35f)),
-        onClick = {
-            val next = when (readNumber(params, "film_format_mm", 35f).roundToInt()) {
-                35 -> 60.0
-                60 -> 105.0
-                else -> 35.0
-            }
-            onDelta(JSONObject().put("film_format_mm", next))
-        },
+        options = filmFormats,
+        selected = readNumber(params, "film_format_mm", 35f).roundToInt().toString(),
+        onPick = { onDelta(JSONObject().put("film_format_mm", it.toDouble())) },
         tag = "params-format",
     )
 
@@ -293,11 +280,54 @@ private fun BeforeContent(params: JSONObject?, onDelta: (JSONObject) -> Unit) {
         onChange = { onDelta(JSONObject().put("grain_active", it)) },
         tag = "switch-grain",
     )
+    // The switch alone is half the control: the desktop's grain row carries an
+    // amount, and the wire has one (`grain_amount`, 0..2, 1.0 = the profile's
+    // measured RMS). Same for halation, which also has a scatter term.
+    SliderRow(
+        label = "颗粒量",
+        value = readNumber(params, "grain_amount", 1f),
+        range = 0f..2f,
+        format = { formatSigned(it, 2) },
+        onChange = { onDelta(JSONObject().put("grain_amount", it.toDouble())) },
+        tag = "field-grain_amount",
+    )
     SwitchRow(
         label = "光晕",
         checked = readBool(params, "film.halation_active", true),
         onChange = { onDelta(JSONObject().put("halation_active", it)) },
         tag = "switch-halation",
+    )
+    SliderRow(
+        label = "光晕量",
+        value = readNumber(params, "halation_amount", 1f),
+        range = 0f..4f,
+        format = { formatSigned(it, 2) },
+        onChange = { onDelta(JSONObject().put("halation_amount", it.toDouble())) },
+        tag = "field-halation_amount",
+    )
+    SliderRow(
+        label = "光晕散射",
+        value = readNumber(params, "halation_scatter_amount", 0f),
+        range = 0f..1f,
+        format = { formatSigned(it, 2) },
+        onChange = { onDelta(JSONObject().put("halation_scatter_amount", it.toDouble())) },
+        tag = "field-halation_scatter_amount",
+    )
+    SliderRow(
+        label = "眩光",
+        value = readNumber(params, "glare_amount", 0f),
+        range = 0f..30f,
+        format = { formatSigned(it, 1) },
+        onChange = { onDelta(JSONObject().put("glare_amount", it.toDouble())) },
+        tag = "field-glare_amount",
+    )
+    SliderRow(
+        label = "镜头柔化",
+        value = readNumber(params, "lens_blur_um", 0f),
+        range = 0f..200f,
+        format = { it.roundToInt().toString() + " µm" },
+        onChange = { onDelta(JSONObject().put("lens_blur_um", it.toDouble())) },
+        tag = "field-lens_blur_um",
     )
 
     Spacer(Modifier.height(18.dp))
@@ -413,16 +443,16 @@ private fun AfterContent(params: JSONObject?, onDelta: (JSONObject) -> Unit) {
 
     SliderRow(
         label = "色温偏移",
-        value = formatSigned(magenta - 65f, 0),
-        value2 = magenta,
+        value = magenta,
+        format = { formatSigned(it - 65f, 0) },
         range = 35f..95f,
         onChange = { balance(deltaM = it - magenta) },
         tag = "field-y_filter",
     )
     SliderRow(
         label = "色调偏移",
-        value = formatSigned(yellow - 55f, 0),
-        value2 = yellow,
+        value = yellow,
+        format = { formatSigned(it - 55f, 0) },
         range = 25f..85f,
         onChange = { balance(deltaY = it - yellow) },
         tag = "field-m_filter",
@@ -435,17 +465,17 @@ private fun AfterContent(params: JSONObject?, onDelta: (JSONObject) -> Unit) {
         label = "曝光",
         // The exposure control's neutral is 1.0, so the readout is the deviation
         // from it: `+0.00` at the engraving, `+0.69` at two-thirds of a stop up.
-        value = formatSigned(readNumber(params, "print.print_exposure", 1f) - 1f, 2),
+        value = readNumber(params, "print.print_exposure", 1f),
+        format = { formatSigned(it - 1f, 2) },
 
-        value2 = readNumber(params, "print.print_exposure", 1f),
         range = 0.4f..2.5f,
         onChange = { onDelta(JSONObject().put("print_exposure", it.toDouble())) },
         tag = "field-print_exposure",
     )
     SliderRow(
         label = "对比",
-        value = formatSigned(readNumber(params, "film.density_curve_gamma", 1f) - 1f, 2),
-        value2 = readNumber(params, "film.density_curve_gamma", 1f),
+        value = readNumber(params, "film.density_curve_gamma", 1f),
+        format = { formatSigned(it - 1f, 2) },
         range = 0.6f..1.6f,
         onChange = { onDelta(JSONObject().put("density_curve_gamma", it.toDouble())) },
         tag = "field-density_curve_gamma",
@@ -454,11 +484,37 @@ private fun AfterContent(params: JSONObject?, onDelta: (JSONObject) -> Unit) {
     DisabledSliderRow(label = "饱和度", value = "0.00", note = "本平台没有这一层")
     SliderRow(
         label = "高光",
-        value = formatSigned(readNumber(params, "print.contrast_mask_highlights", 0f), 2),
-        value2 = readNumber(params, "print.contrast_mask_highlights", 0f),
+        value = readNumber(params, "print.contrast_mask_highlights", 0f),
+        format = { formatSigned(it, 2) },
         range = 0f..2f,
         onChange = { onDelta(JSONObject().put("contrast_mask_highlights", it.toDouble())) },
         tag = "field-contrast_mask_highlights",
+    )
+
+    Spacer(Modifier.height(16.dp))
+    GroupHeader("放大机")
+    ChoiceMenu(
+        label = "光源",
+        options = enlargerIlluminants,
+        selected = readString(params, "enlarger_illuminant", "TH-KG3"),
+        onPick = { onDelta(JSONObject().put("enlarger_illuminant", it)) },
+        tag = "params-illuminant",
+    )
+    SliderRow(
+        label = "DIR 耦合",
+        // The coupler inverse's own exposure axis stops being monotonic above
+        // ~1.736 (AGENTS.md trap 22), so the slider stops before the model does.
+        value = readNumber(params, "dir_couplers_amount", 0f),
+        range = 0f..1.7f,
+        format = { formatSigned(it, 2) },
+        onChange = { onDelta(JSONObject().put("dir_couplers_amount", it.toDouble())) },
+        tag = "field-dir_couplers_amount",
+    )
+    SwitchRow(
+        label = "扫描片基",
+        checked = readBool(params, "scan_film", false),
+        onChange = { onDelta(JSONObject().put("scan_film", it)) },
+        tag = "switch-scan-film",
     )
 
     Spacer(Modifier.height(16.dp))
@@ -640,22 +696,45 @@ private fun GroupHeader(title: String, trailing: String? = null, onTrailing: (()
  *
  * The 46 dp rhythm is A3's: label at the top, the track 25 dp below it, and 21
  * dp of air before the next label.
+ *
+ * **Smooth while the engine catches up.** The row used to call `setParams` on
+ * every `onValueChange`, and each of those re-renders the frame: a drag became a
+ * queue of renders, the thumb lagged the finger, and the page felt broken. The
+ * finger now moves a local value (a state read, no engine), the readout follows
+ * the finger, and the delta is sent once when the gesture ends —
+ * `onValueChangeFinished`.
+ *
+ * `value` is what the engine says; the local copy exists only for the length of
+ * a drag. Anything that changes the parameter from outside (undo, a stock
+ * change, a re-open) writes `value`, and the local copy follows it here.
  */
 @Composable
 private fun SliderRow(
     label: String,
-    value: String,
-    value2: Float,
+    value: Float,
     range: ClosedFloatingPointRange<Float>,
+    format: (Float) -> String,
     onChange: (Float) -> Unit,
     tag: String,
 ) {
+    var local by remember(tag) { mutableStateOf(value) }
+    var dragging by remember(tag) { mutableStateOf(false) }
+    LaunchedEffect(value) {
+        if (!dragging && value != local) local = value
+    }
     Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
-        Readout(label = label, value = value)
+        Readout(label = label, value = format(local))
         Spacer(Modifier.height(7.dp))
         TrackSlider(
-            value = value2,
-            onValueChange = onChange,
+            value = local,
+            onValueChange = {
+                dragging = true
+                local = it
+            },
+            onValueChangeFinished = {
+                dragging = false
+                onChange(local)
+            },
             valueRange = range,
             modifier = Modifier.testTag(tag),
         )
@@ -726,6 +805,83 @@ private fun ChoiceRow(label: String, value: String, onClick: () -> Unit, tag: St
                 tint = Tokens.Ink,
                 modifier = Modifier.size(12.dp),
             )
+        }
+    }
+}
+
+/**
+ * A choice row that opens the *list*.
+ *
+ * The rows used to cycle to the next value on every tap, which hides how many
+ * options exist and makes "go back one" impossible without going all the way
+ * round. 测光 has seven options on the wire and 画幅 has three, so the control
+ * has to show them.
+ */
+@Composable
+private fun ChoiceMenu(
+    label: String,
+    options: List<Pair<String, String>>,
+    selected: String,
+    onPick: (String) -> Unit,
+    tag: String,
+) {
+    var open by remember { mutableStateOf(false) }
+    val shown = options.firstOrNull { it.first == selected }?.second ?: options.first().second
+
+    Box {
+        Row(
+            Modifier.fillMaxWidth().padding(top = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                label,
+                style = Tokens.Type.RowLabel,
+                color = Tokens.InkSecondary,
+                modifier = Modifier.weight(1f),
+            )
+            Row(
+                Modifier
+                    .width(160.dp)
+                    .height(28.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Tokens.Pill)
+                    .border(1.dp, Tokens.Ink.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                    .clickable { open = true }
+                    .testTag(tag),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(shown, style = Tokens.Type.Segment, color = Tokens.Ink)
+                Spacer(Modifier.width(6.dp))
+                Icon(
+                    painter = painterResource(R.drawable.ic_chevron_down),
+                    contentDescription = null,
+                    tint = Tokens.Ink,
+                    modifier = Modifier.size(12.dp),
+                )
+            }
+        }
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            containerColor = Tokens.Pill,
+        ) {
+            options.forEach { (wire, text) ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = text,
+                            style = Tokens.Type.Segment,
+                            color = if (wire == selected) Tokens.Accent else Tokens.Ink,
+                        )
+                    },
+                    onClick = {
+                        open = false
+                        onPick(wire)
+                    },
+                    modifier = Modifier.testTag("$tag-$wire"),
+                )
+            }
         }
     }
 }
@@ -802,40 +958,44 @@ private fun formatSigned(value: Float, decimals: Int): String {
 }
 
 /**
+ * The enlarger's light sources, from the engine's own table
+ * (`core/spectral.cpp`): `TH-KG3` is a 3400 K halogen behind KG3 glass, `-L`
+ * adds the Canon lens, `K75P` is the Kinoton 75P, `T` is a bare incandescent.
+ * D55 and D50 are colour-science illuminants the engine also accepts.
+ */
+private val enlargerIlluminants: List<Pair<String, String>> = listOf(
+    "TH-KG3" to "卤素 3400K + KG3",
+    "TH-KG3-L" to "卤素 + KG3 + 镜头",
+    "K75P" to "Kinoton 75P",
+    "T" to "白炽灯",
+    "D55" to "D55",
+    "D50" to "D50",
+)
+
+/**
  * The engine's own names, and only its names.
  *
- * `params.cpp` validates this field against a fixed list — balanced, center,
- * protect_highlights, protect_shadows, center_weighted, average, median — and
- * answers anything else with "'x' is not an exposure method". The page used to
- * cycle through invented names, so **every** press of 测光 was rejected and the
- * row never changed: the control was wired, and the wire refused it.
+ * `params.cpp` validates this field against a fixed list and answers anything
+ * else with "'x' is not an exposure method". The page used to cycle through
+ * invented names, so **every** press of 测光 was rejected and the row never
+ * changed: the control was wired, and the wire refused it.
  */
-private fun methodLabel(method: String): String = when (method) {
-    "center_weighted" -> "均衡"
-    "protect_highlights" -> "保护高光"
-    "protect_shadows" -> "保护阴影"
-    "balanced" -> "平衡"
-    "center" -> "中央"
-    "average" -> "平均"
-    "median" -> "中值"
-    else -> "均衡"
-}
+private val exposureMethods: List<Pair<String, String>> = listOf(
+    "center_weighted" to "均衡",
+    "protect_highlights" to "保护高光",
+    "protect_shadows" to "保护阴影",
+    "average" to "平均",
+    "median" to "中值",
+    "balanced" to "平衡",
+    "center" to "中央",
+)
 
-private fun nextMethod(method: String): String = when (method) {
-    "center_weighted" -> "protect_highlights"
-    "protect_highlights" -> "protect_shadows"
-    "protect_shadows" -> "average"
-    "average" -> "median"
-    "median" -> "balanced"
-    else -> "center_weighted"
-}
-
-private fun filmFormatLabel(mm: Float): String = when (mm.roundToInt()) {
-    35 -> "135"
-    60 -> "120"
-    105 -> "4×5"
-    else -> "135"
-}
+/** `film_format_mm`'s three formats, keyed by the number the wire takes. */
+private val filmFormats: List<Pair<String, String>> = listOf(
+    "35" to "135",
+    "60" to "120",
+    "105" to "4×5",
+)
 
 /** `DSC03710.ARW` from a long content uri's display name. */
 private fun shortName(name: String): String = name.substringAfterLast('/')

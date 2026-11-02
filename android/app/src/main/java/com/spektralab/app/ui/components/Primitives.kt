@@ -198,6 +198,7 @@ fun SectionHeading(
 fun TrackSlider(
     value: Float,
     onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit = {},
     valueRange: ClosedFloatingPointRange<Float>,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
@@ -217,6 +218,9 @@ fun TrackSlider(
         onValueChange = { v ->
             onValueChange(v)
         },
+        // The end of the gesture, not every frame: the caller commits the
+        // engine delta here so a drag is one render instead of a queue.
+        onValueChangeFinished = onValueChangeFinished,
         valueRange = valueRange,
         enabled = enabled,
         modifier = modifier.fillMaxWidth().height(44.dp),
