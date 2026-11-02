@@ -214,7 +214,9 @@ fun TrackSlider(
     // the kind of thing not to re-implement.
     Slider(
         value = value,
-        onValueChange = onValueChange,
+        onValueChange = { v ->
+            onValueChange(v)
+        },
         valueRange = valueRange,
         enabled = enabled,
         modifier = modifier.fillMaxWidth().height(44.dp),

@@ -106,8 +106,6 @@ fun ParamsScreen(
                 .fillMaxWidth()
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = Tokens.Margin)
-                .padding(top = 16.dp),
         ) {
             if (after) {
                 AfterContent(params = params, onDelta = onDelta)
@@ -747,7 +745,16 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
 // Values
 // ---------------------------------------------------------------------------
 
-/** Reads `group.leaf`, then the flat `leaf`, then the fallback. */
+/**
+ * Reads `group.leaf`, then the flat name the engine actually answers, then the
+ * fallback.
+ *
+ * The document is flat — `print_exposure`, not `print.{print_exposure}`. The
+ * dotted name is the *schema* path, and reading only that made every readout sit
+ * on its default for ever: a working control that looks dead. Measured on the
+ * MI 8, `setParams ok: print=null ev=null` while the render was applying the
+ * value and the label stayed at 0.00.
+ */
 private fun readNumber(params: JSONObject?, path: String, fallback: Float): Float {
     if (params == null) return fallback
     val dot = path.indexOf('.')
@@ -758,7 +765,8 @@ private fun readNumber(params: JSONObject?, path: String, fallback: Float): Floa
             if (!value.isNaN()) return value.toFloat()
         }
     }
-    val flat = params.optDouble(path, Double.NaN)
+    val leaf = path.substringAfterLast('.')
+    val flat = params.optDouble(path, params.optDouble(leaf, Double.NaN))
     return if (flat.isNaN()) fallback else flat.toFloat()
 }
 
@@ -768,7 +776,12 @@ private fun readBool(params: JSONObject?, path: String, fallback: Boolean): Bool
     val group = if (dot > 0) params.optJSONObject(path.substring(0, dot)) else null
     val holder = group ?: params
     val key = if (dot > 0) path.substring(dot + 1) else path
-    return if (holder.has(key)) holder.optBoolean(key, fallback) else fallback
+    if (holder.has(key)) return holder.optBoolean(key, fallback)
+    return if (params.has(path.substringAfterLast('.'))) {
+        params.optBoolean(path.substringAfterLast('.'), fallback)
+    } else {
+        fallback
+    }
 }
 
 private fun readString(params: JSONObject?, path: String, fallback: String): String {
@@ -777,7 +790,9 @@ private fun readString(params: JSONObject?, path: String, fallback: String): Str
     val group = if (dot > 0) params.optJSONObject(path.substring(0, dot)) else null
     val holder = group ?: params
     val key = if (dot > 0) path.substring(dot + 1) else path
-    return holder.optString(key, fallback).ifEmpty { fallback }
+    val answer = holder.optString(key, "")
+    if (answer.isNotEmpty()) return answer
+    return params.optString(path.substringAfterLast('.'), "").ifEmpty { fallback }
 }
 
 /** `+0.30` / `0.00` — the sign the file prints on every readout. */

@@ -197,7 +197,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun setParams(delta: JSONObject, resumeTier: String = _state.value.tier) {
         android.util.Log.i("SpektraLab", "setParams " + delta)
         viewModelScope.launch {
-            val opened = ensureSession() ?: return@launch
+            val opened = ensureSession() ?: run {
+                android.util.Log.e("SpektraLab", "setParams: no session")
+                return@launch
+            }
             // `film_stock` and `print_stock` are not parameters.
             //
             // `params.cpp`'s `validate_delta` skips them by name — "the caller
@@ -222,7 +225,6 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 // have needed. `UndoStack` was never the problem.
                 undoStack.record(before, fields, System.currentTimeMillis())
                 val params = opened.setParams(delta)
-                rememberWireEdits(delta)
                 geometry = params.filterGeometry()
                 _state.value = _state.value.copy(
                     params = params,
@@ -317,7 +319,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun restoreStep(undo: Boolean) {
         viewModelScope.launch {
-            val opened = ensureSession() ?: return@launch
+            val opened = ensureSession() ?: run {
+                android.util.Log.e("SpektraLab", "setParams: no session")
+                return@launch
+            }
             try {
                 val step = (if (undo) undoStack.undo() else undoStack.redo()) ?: return@launch
                 val params = opened.setParams(step)
@@ -345,7 +350,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     /** Reprints from the cached negative: a print-stock change without re-developing. */
     fun reprint() {
         viewModelScope.launch {
-            val opened = ensureSession() ?: return@launch
+            val opened = ensureSession() ?: run {
+                android.util.Log.e("SpektraLab", "setParams: no session")
+                return@launch
+            }
             _state.value = _state.value.copy(phase = Phase.Rendering, busy = true)
             try {
                 val (bitmap, info) = opened.renderInto(_state.value.tier, reprint = true, reuse = _state.value.bitmap)
