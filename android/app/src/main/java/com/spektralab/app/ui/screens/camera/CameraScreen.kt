@@ -243,7 +243,6 @@ fun CameraScreen(
             // them inside the letterbox instead of over the sensor's image.
             Box(Modifier.fillMaxWidth().weight(1f)) {
                 CompositionGuides(Modifier.fillMaxSize())
-                FocusReticle(Modifier.align(Alignment.Center))
                 EvDial(
                     ev = evIndex * evStep,
                     range = evRange.first * evStep..evRange.last * evStep,
@@ -464,9 +463,13 @@ private fun Viewfinder(
                             IntOffset((point.x - half).toInt(), (point.y - half).toInt())
                         }
                         .size(56.dp)
-                        .border(1.5.dp, Color.White, RoundedCornerShape(4.dp))
                         .testTag("camera-focus-reticle"),
-                )
+                ) {
+                    // The prototype's bracket, in the app's accent. The white
+                    // square was ours, and the mark must follow the finger: this
+                    // used to be a fixed reticle in the middle of the frame.
+                    FocusReticle()
+                }
             }
         }
     }

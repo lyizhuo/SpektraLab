@@ -230,7 +230,10 @@ private fun SegmentHalf(
 
 @Composable
 private fun BeforeContent(params: JSONObject?, onDelta: (JSONObject) -> Unit) {
-    LatitudeCard(params = params)
+    // 场景宽容度 is hidden: the engine maps scene latitude only through
+    // `spk_scene_latitude`, which this build does not bind, and a card that
+    // measures something nothing can apply is a promise the product cannot keep.
+    // It comes back when the mapping is wired (see the handoff note).
     Spacer(Modifier.height(20.dp))
 
     GroupHeader("输入 / 相机", trailing = "重置", onTrailing = {
@@ -331,17 +334,11 @@ private fun BeforeContent(params: JSONObject?, onDelta: (JSONObject) -> Unit) {
         onChange = { onDelta(JSONObject().put("lens_blur_um", it.toDouble())) },
         tag = "field-lens_blur_um",
     )
-
-    Spacer(Modifier.height(18.dp))
-    GroupHeader("场景置位", trailing = "未就绪")
-    DisabledSliderRow(label = "高光回拉", value = "0.00", note = null, range = 0f..1f)
-    DisabledSliderRow(label = "阴影回拉", value = "0.00", note = null, range = 0f..1f)
-    Text(
-        text = "正在测光… 完成后可测量，本平台不支持应用",
-        style = Tokens.Type.Caption.copy(fontSize = 9.5.sp),
-        color = Tokens.InkTertiary.copy(alpha = 0.8f),
-        modifier = Modifier.padding(top = 8.dp),
-    )
+    // 场景宽容度 and 场景置位 used to sit here, disabled. They are hidden rather
+    // than greyed: the engine maps scene latitude only through
+    // `spk_scene_latitude`, which this build does not bind, and a control that
+    // can never work is a promise the product cannot keep. Both come back in
+    // the commit that wires that entry point.
 }
 
 /**

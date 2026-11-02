@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -39,6 +41,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.spektralab.app.EditorViewModel.Phase
 import com.spektralab.app.EditorViewModel.UiState
 import com.spektralab.app.export.ExportColorSpace
 import com.spektralab.app.export.ExportFormat
@@ -201,6 +204,43 @@ fun ExportScreen(
             }
 
             Spacer(Modifier.height(16.dp))
+            // What the run is doing, then what it did. The button used to be
+            // enabled while a run was in flight; the second tap returned early
+            // and nothing on screen changed, so it read as a dead control.
+            val running = state.phase == Phase.Exporting
+            if (running) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = Tokens.Accent,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = "正在导出 · " + (state.exportProgress ?: "准备中"),
+                        style = Tokens.Type.Caption,
+                        color = Tokens.InkSecondary,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+            (state.exportOutcome as? ExportOutcome.Success)?.let { done ->
+                Text(
+                    text = "已保存到 Pictures/Latent · " + done.width + "×" + done.height +
+                        " · " + (done.bytes / 1024 / 1024) + " MB",
+                    style = Tokens.Type.Caption,
+                    color = Tokens.Ink,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+            (state.exportOutcome as? ExportOutcome.Failed)?.let { failed ->
+                Text(
+                    text = "导出失败 · " + failed.message,
+                    style = Tokens.Type.Caption,
+                    color = Tokens.Accent,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
             (state.exportOutcome as? ExportOutcome.Refused)?.let {
                 Text(
                     text = it.reason,
@@ -212,10 +252,10 @@ fun ExportScreen(
         }
 
         ActionButton(
-            label = "导出 $exportCount 张",
+            label = if (state.phase == Phase.Exporting) "正在导出…" else "导出 $exportCount 张",
             onClick = { onExport(ExportSpec(format = format, colorSpace = space, longEdge = longEdge)) },
             height = 44.dp,
-            enabled = state.exportGate?.allowed != false,
+            enabled = state.exportGate?.allowed != false && state.phase != Phase.Exporting,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(start = Tokens.Margin, end = Tokens.Margin, top = 8.dp, bottom = 24.dp)
@@ -309,5 +349,4 @@ private val recipes = listOf(
     // DI Cineon writes the same container as TIFF 16 and differs in what the
     // pixels mean; the wire has one field for that (`format`), so the two chips
     // land on the same request until the engine grows a log-encoded writer.
-    Recipe("DI Cineon", ExportFormat.Tiff16, ExportColorSpace.ProPhoto),
 )
