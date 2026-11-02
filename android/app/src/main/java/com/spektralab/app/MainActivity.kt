@@ -74,6 +74,12 @@ class MainActivity : ComponentActivity() {
      */
     private val strip = mutableStateListOf<StripEntry>()
 
+    /** The roll a capture lands in; its frames are what A1's strip shows. */
+    private val rolls by lazy { com.spektralab.app.rolls.RollStore(this) }
+
+    /** The frame the editor was asked to open, so the strip can point at it. */
+    private var lastOpened: Uri? = null
+
     /** The export page's chosen folder, remembered for the run. */
     private var exportDirectory: Uri? = null
 
@@ -119,6 +125,7 @@ class MainActivity : ComponentActivity() {
                 contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             addToStrip(uri)
+        lastOpened = uri
         }
         importRows = picked.map { ImportRow(nameOf(it), ImportRow.State.Waiting) }
         importOpen = true
@@ -185,12 +192,33 @@ class MainActivity : ComponentActivity() {
         val uri = result.data?.data ?: return@registerForActivityResult
         val name = uri.lastPathSegment?.substringAfterLast('/') ?: "capture.dng"
         if (strip.none { it.uri == uri }) strip.add(StripEntry(uri, name))
+        lastOpened = uri
         viewModel.open(uri, name)
     }
 
+    /**
+     * A1's film strip is the roll, not the one frame that was just opened.
+     *
+     * The strip used to be filled only by the caller: one entry from the camera,
+     * one from the picker. That made A1 look like a single-photograph editor and
+     * hid every other frame of the roll, even though `RollStore` had been
+     * recording them all along — the camera appends each capture's content URI.
+     */
+    private fun seedStripFromRoll() {
+        runCatching {
+            val roll = rolls.current() ?: return@runCatching
+            for (id in roll.frameIds) {
+                val uri = runCatching { Uri.parse(id) }.getOrNull() ?: continue
+                if (strip.none { it.uri == uri }) {
+                    strip.add(StripEntry(uri, uri.lastPathSegment?.substringAfterLast('/') ?: "frame"))
+                }
+            }
+        }
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewModel.boot()
+        seedStripFromRoll()
         openFromIntent(intent)
 
         @Suppress("DEPRECATION")
@@ -215,6 +243,14 @@ class MainActivity : ComponentActivity() {
                     var selected by remember { mutableStateOf(0) }
                     var stocks by remember { mutableStateOf(Stocks()) }
                     var directoryLabel by remember { mutableStateOf<String?>(null) }
+
+                    // Point the strip at the frame that was asked for. The strip
+                    // is seeded from the roll, so the opened frame is one of many.
+                    LaunchedEffect(strip.size, lastOpened) {
+                        val uri = lastOpened ?: return@LaunchedEffect
+                        val index = strip.indexOfFirst { it.uri == uri }
+                        if (index >= 0) selected = index
+                    }
 
                     LaunchedEffect(Unit) {
                         stocks = runCatching { StockCatalog.load(this@MainActivity) }.getOrDefault(Stocks())
@@ -397,6 +433,7 @@ class MainActivity : ComponentActivity() {
     private fun addToStrip(uri: Uri) {
         val name = nameOf(uri)
         if (strip.none { it.uri == uri }) strip.add(StripEntry(uri, name))
+        lastOpened = uri
     }
 
     /**
@@ -460,6 +497,7 @@ class MainActivity : ComponentActivity() {
         }
         runCatching {
             addToStrip(uri)
+        lastOpened = uri
             viewModel.open(uri, nameOf(uri))
         }
     }
