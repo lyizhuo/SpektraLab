@@ -138,6 +138,17 @@ class HomeActivity : ComponentActivity() {
                                 if (rolls.current()?.id != roll.id) rolls.save(roll)
                                 launchCamera.launch(CameraActivity.intent(this@HomeActivity))
                             },
+                            // 继续编辑 is the editor, not the shutter: open the
+                            // frame the roll is actually on, and fall back to the
+                            // album when the roll is empty.
+                            onContinueEditing = {
+                                val last = rolls.current()?.frameIds?.lastOrNull()
+                                if (last != null) {
+                                    openInEditor(Uri.parse(last))
+                                } else {
+                                    pickerOpen = true
+                                }
+                            },
                             onPickAlbum = { pickerOpen = true },
                             onCamera = { launchCamera.launch(CameraActivity.intent(this@HomeActivity)) },
                             onOpenRecent = { frame -> openInEditor(frame.uri) },

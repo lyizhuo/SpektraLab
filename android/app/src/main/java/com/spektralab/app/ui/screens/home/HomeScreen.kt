@@ -81,6 +81,7 @@ fun HomeScreen(
     rolls: List<Roll>,
     recent: List<RecentFrame>,
     onOpenRoll: (Roll) -> Unit,
+    onContinueEditing: () -> Unit = {},
     onPickAlbum: () -> Unit,
     onCamera: () -> Unit,
     onOpenRecent: (RecentFrame) -> Unit,
@@ -119,6 +120,7 @@ fun HomeScreen(
                     heroUri = recent.firstOrNull { frame -> current.frameIds.any { it == frame.uri.toString() } }?.uri
                         ?: recent.firstOrNull()?.uri,
                     onClick = { onOpenRoll(current) },
+                    onContinue = onContinueEditing,
                 )
                 Spacer(Modifier.height(22.dp))
             } else {
@@ -257,6 +259,8 @@ private fun ContinueCard(
     frameName: String?,
     heroUri: Uri?,
     onClick: () -> Unit,
+    /** 继续编辑 opens the frame the roll is on; the card itself goes shooting. */
+    onContinue: () -> Unit = onClick,
 ) {
     Box(
         Modifier
@@ -324,7 +328,7 @@ private fun ContinueCard(
                     .clip(RoundedCornerShape(14.dp))
                     .background(Tokens.Pill)
                     .border(1.dp, Tokens.PillHairline, RoundedCornerShape(14.dp))
-                    .clickable(onClick = onClick)
+                    .clickable(onClick = onContinue)
                     .testTag("home-continue-button"),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
