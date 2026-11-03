@@ -33,6 +33,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.spektralab.app.EditorViewModel.Phase
+import android.content.ContentResolver
+import androidx.core.content.FileProvider
+import java.io.File
 import com.spektralab.app.export.ExportTarget
 import com.spektralab.app.ui.StockCatalog
 import com.spektralab.app.ui.Stocks
@@ -215,7 +218,23 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    override fun onCreate(savedInstanceState: Bundle?) {
+    /**
+     * A uri the engine can actually open.
+     *
+     * `spk_open` is handed a descriptor, and `ContentResolver.openFileDescriptor`
+     * throws on anything that is not `content://` — a `file://` frame id stored
+     * by an older roll, or a bare path from the album scan, both used to travel
+     * as far as `open` and die there, so the editor never appeared.
+     */
+    private fun resolvableUri(uri: Uri): Uri? {
+        if (uri.scheme == ContentResolver.SCHEME_CONTENT) return uri
+        val path = uri.path ?: return null
+        val file = File(path)
+        if (!file.exists()) return null
+        return runCatching {
+            FileProvider.getUriForFile(this, "$packageName.captures", file)
+        }.getOrElse { null }
+    }    override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewModel.boot()
         seedStripFromRoll()
@@ -365,6 +384,10 @@ class MainActivity : ComponentActivity() {
                                 "输出 ${it.width} × ${it.height}"
                             } ?: "输出 —",
                             onAspect = { label -> aspect = label; viewModel.setParams(aspectDelta(label)) },
+                            // A handle drag leaves the preset behind, and the pill
+                            // must say so rather than claim a ratio the box no
+                            // longer has.
+                            onCropEdited = { aspect = "自由" },
                             onRotate = { clockwise ->
                                 viewModel.setParams(JSONObject().put("geometry_quarter_turns", if (clockwise) 3 else 1))
                             },
@@ -496,7 +519,12 @@ class MainActivity : ComponentActivity() {
     private fun openFromIntent(intent: Intent?) {
         if (intent == null) return
         @Suppress("DEPRECATION")
-        val uri = intent.getParcelableExtra<Uri>(EXTRA_OPEN_URI) ?: intent.data ?: return
+            // A frame id from a roll can be a bare path (`file:///…` or no
+            // scheme at all), and the engine's door is `openFileDescriptor`,
+            // which refuses those. Everything that arrives is normalised to a
+            // readable `content://` first — the same door the camera uses.
+            val raw = intent.getParcelableExtra<Uri>(EXTRA_OPEN_URI) ?: intent.data ?: return
+            val uri = resolvableUri(raw) ?: return
         runCatching {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }

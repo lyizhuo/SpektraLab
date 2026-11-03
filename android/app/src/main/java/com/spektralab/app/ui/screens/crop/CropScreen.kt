@@ -49,6 +49,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.spektralab.app.R
@@ -86,6 +87,8 @@ fun CropScreen(
     cropW: Float = 1f,
     cropH: Float = 1f,
     onCrop: (Float, Float, Float, Float) -> Unit = { _, _, _, _ -> },
+    /** A handle drag means the presets no longer describe the box. */
+    onCropEdited: () -> Unit = {},
     onCancel: () -> Unit,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
@@ -106,6 +109,7 @@ fun CropScreen(
             cropW = cropW,
             cropH = cropH,
             onCrop = onCrop,
+            onEdited = onCropEdited,
             modifier = Modifier.weight(1f).fillMaxWidth(),
         )
         CropTools(
@@ -170,69 +174,74 @@ private fun CropCanvas(
     cropW: Float,
     cropH: Float,
     onCrop: (Float, Float, Float, Float) -> Unit,
+    /** A handle drag means the user left the presets behind. */
+    onEdited: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(modifier.background(Tokens.Canvas), contentAlignment = Alignment.Center) {
-        // The frame keeps the photograph's own shape, like the editor's does: a
-        // landscape file gets a landscape frame, so the crop rect's fractions are
-        // the ones the export will use rather than an artefact of the window.
         val photoRatio = if (bitmap != null && bitmap.height > 0) {
             bitmap.width.toFloat() / bitmap.height
         } else {
             3f / 2f
         }
-        val frameHeight = minOf(maxHeight - 40.dp, (maxWidth - 40.dp) / photoRatio)
+        // 48 dp of air on each side. At 22 dp the frame's left and right edges sit
+        // inside Android's edge-back gesture zone, and dragging a handle there
+        // closed the screen instead of moving the crop.
+        val frameHeight = minOf(maxHeight - 88.dp, (maxWidth - 96.dp) / photoRatio)
         val frameWidth = frameHeight * photoRatio
-        val frameWidthPx = with(LocalDensity.current) { frameWidth.toPx() }
-        val frameHeightPx = with(LocalDensity.current) { frameHeight.toPx() }
+        val density = LocalDensity.current
+        val frameWidthPx = with(density) { frameWidth.toPx() }
+        val frameHeightPx = with(density) { frameHeight.toPx() }
 
+        val minSide = 0.08f
         fun clampX(value: Float, width: Float) = value.coerceIn(0f, (1f - width).coerceAtLeast(0f))
         fun clampY(value: Float, height: Float) = value.coerceIn(0f, (1f - height).coerceAtLeast(0f))
 
-        // The finger moves a local rect; the engine sees one delta when the
-        // gesture settles. Committing every frame queued a render per frame, which
-        // is exactly what made the parameter page's sliders feel broken.
+        // The gesture moves this; the engine is told once it settles. A delta per
+        // frame queued a render per frame — the defect the sliders had.
         var rect by remember { mutableStateOf(CropRect(cropX, cropY, cropW, cropH)) }
-
-        // Anything that changes the rect from outside (an aspect pill, undo, a
-        // re-open) wins, unless we are the ones mid-gesture.
         LaunchedEffect(cropX, cropY, cropW, cropH) {
             val fresh = CropRect(cropX, cropY, cropW, cropH)
             if (fresh != rect) rect = fresh
         }
         LaunchedEffect(rect) {
             if (rect == CropRect(cropX, cropY, cropW, cropH)) return@LaunchedEffect
-            delay(120)
+            delay(90)
             onCrop(rect.x, rect.y, rect.w, rect.h)
         }
 
-        Box(
-            Modifier
-                .width(frameWidth)
-                .height(frameHeight)
-                .clip(RoundedCornerShape(2.dp))
-                // One detector, not two. `detectDragGestures` and `transformable`
-                // on the same node compete for the same pointers and the drag
-                // detector claims the first one, so a pinch never arrived. The old
-                // `pointerInput` keys were also the crop values themselves, which
-                // tore the handler down on the first update of every gesture.
-                .pointerInput(frameWidthPx, frameHeightPx) {
-                    detectTransformGestures { _, pan, zoom, _ ->
-                        val r = rect
-                        val width = (r.w / zoom).coerceIn(0.05f, 1f)
-                        val height = (r.h / zoom).coerceIn(0.05f, 1f)
-                        // Scale around the box's own centre, then pan.
-                        val centreX = r.x + r.w / 2f
-                        val centreY = r.y + r.h / 2f
-                        rect = CropRect(
-                            clampX(centreX - width / 2f + pan.x / frameWidthPx, width),
-                            clampY(centreY - height / 2f + pan.y / frameHeightPx, height),
-                            width,
-                            height,
-                        )
-                    }
-                },
-        ) {
+        /** Moves one edge by a normalised delta, keeping the opposite edge fixed. */
+        fun resize(edge: CropEdge, dxNorm: Float, dyNorm: Float) {
+            val r = rect
+            var left = r.x
+            var top = r.y
+            var right = r.x + r.w
+            var bottom = r.y + r.h
+            when (edge) {
+                CropEdge.Left, CropEdge.TopLeft, CropEdge.BottomLeft -> left += dxNorm
+                CropEdge.Right, CropEdge.TopRight, CropEdge.BottomRight -> right += dxNorm
+                else -> {}
+            }
+            when (edge) {
+                CropEdge.Top, CropEdge.TopLeft, CropEdge.TopRight -> top += dyNorm
+                CropEdge.Bottom, CropEdge.BottomLeft, CropEdge.BottomRight -> bottom += dyNorm
+                else -> {}
+            }
+            left = left.coerceIn(0f, right - minSide)
+            right = right.coerceIn(left + minSide, 1f)
+            top = top.coerceIn(0f, bottom - minSide)
+            bottom = bottom.coerceIn(top + minSide, 1f)
+            rect = CropRect(left, top, right - left, bottom - top)
+            onEdited()
+        }
+
+        fun move(dxNorm: Float, dyNorm: Float) {
+            val r = rect
+            rect = CropRect(clampX(r.x + dxNorm, r.w), clampY(r.y + dyNorm, r.h), r.w, r.h)
+            onEdited()
+        }
+
+        Box(Modifier.width(frameWidth).height(frameHeight).clip(RoundedCornerShape(2.dp))) {
             if (bitmap != null) {
                 Image(
                     bitmap = bitmap.asImageBitmap(),
@@ -249,8 +258,7 @@ private fun CropCanvas(
             val leftDp = frameWidth * rect.x
             val topDp = frameHeight * rect.y
 
-            // Everything outside the rect, dimmed: four bands rather than one
-            // rectangle so the frame's own light still reads around the keep.
+            // Everything outside the rect, dimmed.
             Box(
                 Modifier.width(frameWidth).height(topDp).align(Alignment.TopStart)
                     .background(Tokens.Scrim),
@@ -263,26 +271,29 @@ private fun CropCanvas(
             )
             Box(
                 Modifier.width(leftDp).height(boxHeightDp).align(Alignment.TopStart)
-                    .offset(y = topDp)
-                    .background(Tokens.Scrim),
+                    .offset(y = topDp).background(Tokens.Scrim),
             )
             Box(
                 Modifier.width((frameWidth - leftDp - boxWidthDp).coerceAtLeast(0.dp))
                     .height(boxHeightDp).align(Alignment.TopStart)
-                    .offset(x = leftDp + boxWidthDp, y = topDp)
-                    .background(Tokens.Scrim),
+                    .offset(x = leftDp + boxWidthDp, y = topDp).background(Tokens.Scrim),
             )
 
-            val boxShape = RoundedCornerShape(1.dp)
+            // Drag inside the keep to move the whole crop.
             Box(
                 Modifier
                     .offset(x = leftDp, y = topDp)
                     .width(boxWidthDp)
                     .height(boxHeightDp)
-                    .border(1.4.dp, Tokens.Ink.copy(alpha = 0.95f), boxShape)
+                    .border(1.4.dp, Tokens.Ink.copy(alpha = 0.95f), RoundedCornerShape(1.dp))
+                    .pointerInput(frameWidthPx, frameHeightPx) {
+                        detectDragGestures { change, drag ->
+                            change.consume()
+                            move(drag.x / frameWidthPx, drag.y / frameHeightPx)
+                        }
+                    }
                     .testTag("crop-box"),
             ) {
-                // The rule of thirds, a hairline at 28 %.
                 androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
                     val third = Tokens.Ink.copy(alpha = 0.28f)
                     for (index in 1..2) {
@@ -292,13 +303,80 @@ private fun CropCanvas(
                         drawLine(third, Offset(0f, y), Offset(size.width, y), 1f)
                     }
                 }
-                CropCorners()
             }
+
+            // Eight grips. The touch box has to lie inside the clipped frame —
+            // half of a box centred on an edge is clipped away, which is why a
+            // press exactly on the corner did nothing — so the *touch* area is
+            // inset by its own half, while the bar drawn inside it is nudged back
+            // out so the grip still reads as sitting on the corner.
+            val touch = 40.dp
+            val bar = 14.dp
+            CropHandle(CropEdge.TopLeft, leftDp, topDp, touch, bar, frameWidthPx, frameHeightPx) { e, dx, dy -> resize(e, dx, dy) }
+            CropHandle(CropEdge.TopRight, leftDp + boxWidthDp, topDp, touch, bar, frameWidthPx, frameHeightPx) { e, dx, dy -> resize(e, dx, dy) }
+            CropHandle(CropEdge.BottomLeft, leftDp, topDp + boxHeightDp, touch, bar, frameWidthPx, frameHeightPx) { e, dx, dy -> resize(e, dx, dy) }
+            CropHandle(CropEdge.BottomRight, leftDp + boxWidthDp, topDp + boxHeightDp, touch, bar, frameWidthPx, frameHeightPx) { e, dx, dy -> resize(e, dx, dy) }
+            CropHandle(CropEdge.Top, leftDp + boxWidthDp / 2, topDp, touch, bar, frameWidthPx, frameHeightPx) { e, dx, dy -> resize(e, dx, dy) }
+            CropHandle(CropEdge.Bottom, leftDp + boxWidthDp / 2, topDp + boxHeightDp, touch, bar, frameWidthPx, frameHeightPx) { e, dx, dy -> resize(e, dx, dy) }
+            CropHandle(CropEdge.Left, leftDp, topDp + boxHeightDp / 2, touch, bar, frameWidthPx, frameHeightPx) { e, dx, dy -> resize(e, dx, dy) }
+            CropHandle(CropEdge.Right, leftDp + boxWidthDp, topDp + boxHeightDp / 2, touch, bar, frameWidthPx, frameHeightPx) { e, dx, dy -> resize(e, dx, dy) }
         }
     }
 }
 
+/**
+ * One grip: a 40 dp touch area inside the frame, with the bar nudged back onto
+ * the edge it belongs to.
+ */
+@Composable
+private fun CropHandle(
+    edge: CropEdge,
+    edgeX: Dp,
+    edgeY: Dp,
+    touch: Dp,
+    bar: Dp,
+    frameWidthPx: Float,
+    frameHeightPx: Float,
+    onDrag: (CropEdge, Float, Float) -> Unit,
+) {
+    val towardsLeft = edge == CropEdge.Left || edge == CropEdge.TopLeft || edge == CropEdge.BottomLeft
+    val towardsTop = edge == CropEdge.Top || edge == CropEdge.TopLeft || edge == CropEdge.TopRight
+    // Touch area lives fully inside the frame…
+    val centreX = if (towardsLeft || edge == CropEdge.Left) edgeX + touch / 2 else edgeX - touch / 2
+    val centreY = if (towardsTop || edge == CropEdge.Top) edgeY + touch / 2 else edgeY - touch / 2
+    // …while the bar is drawn back out at the edge.
+    val shiftX = if (towardsLeft) -(touch / 2) else if (edge == CropEdge.Right || edge == CropEdge.TopRight || edge == CropEdge.BottomRight) touch / 2 else 0.dp
+    val shiftY = if (towardsTop) -(touch / 2) else if (edge == CropEdge.Bottom || edge == CropEdge.BottomLeft || edge == CropEdge.BottomRight) touch / 2 else 0.dp
+
+    Box(
+        Modifier
+            .offset(x = centreX - touch / 2, y = centreY - touch / 2)
+            .size(touch)
+            .pointerInput(edge) {
+                detectDragGestures { change, drag ->
+                    change.consume()
+                    onDrag(edge, drag.x / frameWidthPx, drag.y / frameHeightPx)
+                }
+            }
+            .testTag("crop-handle-" + edge.name.lowercase()),
+        contentAlignment = Alignment.Center,
+    ) {
+        val vertical = edge == CropEdge.Left || edge == CropEdge.Right
+        Box(
+            Modifier
+                .offset(x = shiftX, y = shiftY)
+                .size(width = if (vertical) bar / 2 else bar * 1.4f, height = if (vertical) bar * 1.4f else bar / 2)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Tokens.Ink),
+        )
+    }
+}
+
+/** Which edge a grip moves; corners move two. */
+private enum class CropEdge { Left, Top, Right, Bottom, TopLeft, TopRight, BottomLeft, BottomRight }
+
 private data class CropRect(val x: Float, val y: Float, val w: Float, val h: Float)
+
 
 /** Four crosshair corners in the file's own shape: a 26 dp bar crossing a 4 dp one. */
 @Composable
