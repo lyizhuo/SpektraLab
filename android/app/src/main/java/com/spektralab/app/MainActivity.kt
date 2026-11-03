@@ -354,6 +354,10 @@ class MainActivity : ComponentActivity() {
                         )
                     } else if (tool == EditorTool.Crop) {
                         CropScreen(
+                            cropX = state.params?.optJSONObject("io")?.optJSONObject("geometry")?.optDouble("crop_x", 0.0)?.toFloat() ?: 0f,
+                            cropY = state.params?.optJSONObject("io")?.optJSONObject("geometry")?.optDouble("crop_y", 0.0)?.toFloat() ?: 0f,
+                            cropW = state.params?.optJSONObject("io")?.optJSONObject("geometry")?.optDouble("crop_w", 1.0)?.toFloat() ?: 1f,
+                            cropH = state.params?.optJSONObject("io")?.optJSONObject("geometry")?.optDouble("crop_h", 1.0)?.toFloat() ?: 1f,
                             bitmap = state.bitmap,
                             aspect = aspect,
                             rotation = rotation,

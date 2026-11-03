@@ -74,6 +74,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val source: Source? = null,
         val tier: String = "live",
         val bitmap: Bitmap? = null,
+        /**
+         * The frame as it was opened, before a single edit. Long-press on the
+         * canvas shows this, which is the only honest "before": the camera's
+         * own raw, not a second render of the current parameters.
+         */
+        val original: Bitmap? = null,
         val lastRender: RenderInfo? = null,
         val params: JSONObject? = null,
         val memory: JSONObject? = null,
@@ -166,7 +172,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun open(uri: Uri, displayName: String, halfSize: Boolean = true, decodeJson: JSONObject? = null) {
         if (client == null) return
         viewModelScope.launch {
-            _state.value = _state.value.copy(phase = Phase.Opening, busy = true, error = null)
+            _state.value = _state.value.copy(phase = Phase.Opening, busy = true, error = null, original = null)
             saveEdits()
             try {
                 currentUri = uri
@@ -273,7 +279,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val uri = currentUri ?: return
         val name = currentName ?: return
         try {
-            _state.value = _state.value.copy(phase = Phase.Opening, busy = true, error = null)
+            _state.value = _state.value.copy(phase = Phase.Opening, busy = true, error = null, original = null)
             val merged = JSONObject(wireEdits.toString())
             delta.keys().forEach { key ->
                 val value = delta.opt(key)
@@ -610,7 +616,11 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         _state.value = _state.value.copy(phase = Phase.Rendering, busy = true)
         try {
             val (bitmap, info) = opened.renderInto(tier, reprint = false, reuse = reuse)
+            // The first frame of a session is the "before": keep it for the
+            // canvas's long press, and let a new open replace it.
+            val before = _state.value.original ?: bitmap
             _state.value = _state.value.copy(
+                original = before,
                 bitmap = bitmap,
                 lastRender = info,
                 memory = info.memory,

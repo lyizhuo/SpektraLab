@@ -26,8 +26,21 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.gestures.TransformableState
+import kotlin.math.roundToInt
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -271,17 +284,83 @@ private fun canvasBadge(state: UiState): String {
     return "${state.tier} · ${info.width}×${info.height}"
 }
 
-/** The photograph itself, fitted inside the negative's window. */
+/**
+ * The photograph itself, fitted inside the negative's window.
+ *
+ * **Pinch to inspect, hold to see the frame as it was opened.** Both are
+ * Compose's own components: `transformable` owns the pinch and the pan, and
+ * `detectTapGestures` owns the press. Nothing divides pixels by hand — the scale
+ * and the translation go into a `graphicsLayer`, which is also what keeps the
+ * gesture at the compositor's frame rate instead of the engine's.
+ *
+ * The long press shows `state.original`, the first frame of the session. It is
+ * deliberately *not* a second render with the current parameters: "before" has to
+ * mean what came out of the camera, or it is just another after.
+ */
 @Composable
 private fun Photo(state: UiState) {
     val bitmap = state.bitmap
-    Box(Modifier.fillMaxSize().background(Color(0xFF0A0908)).testTag("editor-frame")) {
-        if (bitmap != null) {
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    var holding by remember { mutableStateOf(false) }
+
+    // A new frame starts at 1×: a zoom that survived an open would land on
+    // somebody else's composition.
+    LaunchedEffect(state.source?.uri) {
+        scale = 1f
+        offset = Offset.Zero
+    }
+    val transform = remember {
+        TransformableState { zoomChange, panChange, _ ->
+            scale = (scale * zoomChange).coerceIn(1f, 8f)
+            offset = if (scale > 1.001f) offset + panChange else Offset.Zero
+        }
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xFF0A0908))
+            .testTag("editor-frame")
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onLongPress = { holding = true },
+                    onPress = {
+                        tryAwaitRelease()
+                        holding = false
+                    },
+                )
+            }
+            .transformable(state = transform),
+    ) {
+        val shown = if (holding) state.original ?: bitmap else bitmap
+        if (shown != null) {
             Image(
-                bitmap = bitmap.asImageBitmap(),
+                bitmap = shown.asImageBitmap(),
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offset.x
+                        translationY = offset.y
+                    },
+            )
+        }
+        if (holding) {
+            // The badge is the difference between "this is the before" and "the
+            // app forgot my edits".
+            FrameBadge(
+                text = "原图",
+                modifier = Modifier.align(Alignment.TopStart).padding(start = 18.dp, top = 18.dp),
+            )
+        }
+        if (scale > 1.001f) {
+            FrameBadge(
+                text = scale.roundToInt().toString() + "×",
+                modifier = Modifier.align(Alignment.BottomStart).padding(start = 18.dp, bottom = 21.dp),
             )
         }
     }

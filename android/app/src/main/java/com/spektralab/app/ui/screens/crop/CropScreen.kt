@@ -17,12 +17,22 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.gestures.TransformableState
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -66,6 +76,12 @@ fun CropScreen(
     onRotate: (Boolean) -> Unit,
     onFlip: (Boolean) -> Unit,
     onStraighten: (Float) -> Unit,
+    /** The engine's crop rect, normalised; the canvas edits these four. */
+    cropX: Float = 0f,
+    cropY: Float = 0f,
+    cropW: Float = 1f,
+    cropH: Float = 1f,
+    onCrop: (Float, Float, Float, Float) -> Unit = { _, _, _, _ -> },
     onCancel: () -> Unit,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
@@ -78,7 +94,16 @@ fun CropScreen(
             .testTag("crop"),
     ) {
         CropBar(onCancel = onCancel, onDone = onDone)
-        CropCanvas(bitmap = bitmap, aspect = aspect, modifier = Modifier.weight(1f).fillMaxWidth())
+        CropCanvas(
+            bitmap = bitmap,
+            aspect = aspect,
+            cropX = cropX,
+            cropY = cropY,
+            cropW = cropW,
+            cropH = cropH,
+            onCrop = onCrop,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        )
         CropTools(
             aspect = aspect,
             rotation = rotation,
@@ -121,17 +146,31 @@ private fun CropBar(onCancel: () -> Unit, onDone: () -> Unit) {
 }
 
 /**
- * The canvas: the frame, the box over it, the thirds, and four crosshair corners.
+ * The canvas: the frame, the crop box over it, the thirds and four corners.
  *
- * The box is inset from the frame by whatever the chosen aspect leaves over, and
- * what is outside it is dimmed — the same "this is what you keep" reading the
- * file draws.
+ * **The box is the engine's crop.** The wire takes a normalised rect
+ * (`geometry_crop_x/y/w/h`), so this draws exactly that rect and the two
+ * gestures edit the same four numbers: a drag moves the rect, a pinch resizes it
+ * around its own centre. Nothing here is a preview of a different crop than the
+ * one the export will write — the round trip is the point.
+ *
+ * Compose's own gestures do the work (`detectDragGestures`, `transformable`):
+ * a hand-rolled pointer loop on this surface is what left A3/A4's sliders dead.
  */
 @Composable
-private fun CropCanvas(bitmap: Bitmap?, aspect: String, modifier: Modifier = Modifier) {
+private fun CropCanvas(
+    bitmap: Bitmap?,
+    aspect: String,
+    cropX: Float,
+    cropY: Float,
+    cropW: Float,
+    cropH: Float,
+    onCrop: (Float, Float, Float, Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     BoxWithConstraints(modifier.background(Tokens.Canvas), contentAlignment = Alignment.Center) {
         // The frame keeps the photograph's own shape, like the editor's does: a
-        // landscape file gets a landscape frame, so the crop box's insets are
+        // landscape file gets a landscape frame, so the crop rect's fractions are
         // the ones the export will use rather than an artefact of the window.
         val photoRatio = if (bitmap != null && bitmap.height > 0) {
             bitmap.width.toFloat() / bitmap.height
@@ -140,12 +179,45 @@ private fun CropCanvas(bitmap: Bitmap?, aspect: String, modifier: Modifier = Mod
         }
         val frameHeight = minOf(maxHeight - 40.dp, (maxWidth - 40.dp) / photoRatio)
         val frameWidth = frameHeight * photoRatio
+        val frameWidthPx = with(LocalDensity.current) { frameWidth.toPx() }
+        val frameHeightPx = with(LocalDensity.current) { frameHeight.toPx() }
+
+        fun clampX(value: Float, width: Float) = value.coerceIn(0f, (1f - width).coerceAtLeast(0f))
+        fun clampY(value: Float, height: Float) = value.coerceIn(0f, (1f - height).coerceAtLeast(0f))
+
+        val transform = remember {
+            TransformableState { zoomChange, _, _ ->
+                val width = (cropW / zoomChange).coerceIn(0.08f, 1f)
+                val height = (cropH / zoomChange).coerceIn(0.08f, 1f)
+                // Grow and shrink around the box's own centre.
+                val centreX = cropX + cropW / 2f
+                val centreY = cropY + cropH / 2f
+                onCrop(
+                    clampX(centreX - width / 2f, width),
+                    clampY(centreY - height / 2f, height),
+                    width,
+                    height,
+                )
+            }
+        }
 
         Box(
             Modifier
                 .width(frameWidth)
                 .height(frameHeight)
-                .clip(RoundedCornerShape(2.dp)),
+                .clip(RoundedCornerShape(2.dp))
+                .pointerInput(frameWidthPx, frameHeightPx, cropX, cropY, cropW, cropH) {
+                    detectDragGestures { change, drag ->
+                        change.consume()
+                        onCrop(
+                            clampX(cropX + drag.x / frameWidthPx, cropW),
+                            clampY(cropY + drag.y / frameHeightPx, cropH),
+                            cropW,
+                            cropH,
+                        )
+                    }
+                }
+                .transformable(state = transform),
         ) {
             if (bitmap != null) {
                 Image(
@@ -158,25 +230,40 @@ private fun CropCanvas(bitmap: Bitmap?, aspect: String, modifier: Modifier = Mod
                 Box(Modifier.fillMaxSize().background(Tokens.Raise))
             }
 
-            val ratio = cropRatio(aspect, photoRatio)
-            val boxWidth = if (ratio > photoRatio) frameWidth else frameHeight * ratio
-            val boxHeight = if (ratio > photoRatio) frameWidth / ratio else frameHeight
-            val insetX = (frameWidth - boxWidth) / 2f
-            val insetY = (frameHeight - boxHeight) / 2f
+            val boxWidthDp = frameWidth * cropW
+            val boxHeightDp = frameHeight * cropH
+            val leftDp = frameWidth * cropX
+            val topDp = frameHeight * cropY
 
-            // Everything outside the box, dimmed: four bands rather than one
+            // Everything outside the rect, dimmed: four bands rather than one
             // rectangle so the frame's own light still reads around the keep.
-            Box(Modifier.fillMaxWidth().height(insetY).align(Alignment.TopCenter).background(Tokens.Scrim))
-            Box(Modifier.fillMaxWidth().height(insetY).align(Alignment.BottomCenter).background(Tokens.Scrim))
-            Box(Modifier.width(insetX).height(boxHeight).align(Alignment.CenterStart).background(Tokens.Scrim))
-            Box(Modifier.width(insetX).height(boxHeight).align(Alignment.CenterEnd).background(Tokens.Scrim))
+            Box(
+                Modifier.width(frameWidth).height(topDp).align(Alignment.TopStart)
+                    .background(Tokens.Scrim),
+            )
+            Box(
+                Modifier.width(frameWidth).height((frameHeight - topDp - boxHeightDp).coerceAtLeast(0.dp))
+                    .align(Alignment.BottomStart).background(Tokens.Scrim),
+            )
+            Box(
+                Modifier.width(leftDp).height(boxHeightDp)
+                    .offset(x = 0.dp, y = topDp).align(Alignment.TopStart)
+                    .background(Tokens.Scrim),
+            )
+            Box(
+                Modifier.width((frameWidth - leftDp - boxWidthDp).coerceAtLeast(0.dp))
+                    .height(boxHeightDp).offset(x = leftDp + boxWidthDp, y = topDp)
+                    .align(Alignment.TopStart).background(Tokens.Scrim),
+            )
 
             val boxShape = RoundedCornerShape(1.dp)
             Box(
                 Modifier
-                    .width(boxWidth)
-                    .height(boxHeight)
-                    .border(1.4.dp, Tokens.Ink.copy(alpha = 0.95f), boxShape),
+                    .offset(x = leftDp, y = topDp)
+                    .width(boxWidthDp)
+                    .height(boxHeightDp)
+                    .border(1.4.dp, Tokens.Ink.copy(alpha = 0.95f), boxShape)
+                    .testTag("crop-box"),
             ) {
                 // The rule of thirds, a hairline at 28 %.
                 androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
