@@ -208,15 +208,18 @@ private fun EditorBar(
         )
     }
 }
-
 /**
  * The light box: a warm glow, the negative centred in it, and the two
  * instruments that sit over the corner.
  *
- * The negative is sized from the canvas rather than from the file's absolute
- * 364×528: it takes 364/528 of the height it is given when that is the smaller
- * constraint, and the width it is given less 44 otherwise, so the frame is
- * always fully visible and always the same shape.
+ * **The negative is one object and it zooms as one.** The frame, its sprocket
+ * holes and its edge printing used to sit outside the pinch, so a zoom moved the
+ * photograph out of its own film — the picture grew while its border stayed put.
+ * The scale now goes on the whole `FilmFrame`, and only the two badges stay
+ * outside it.
+ *
+ * The long press shows the frame as it was opened (`state.original`): the
+ * camera's own output, not a second render of the current parameters.
  */
 @Composable
 private fun CanvasArea(state: UiState, modifier: Modifier = Modifier) {
@@ -235,6 +238,23 @@ private fun CanvasArea(state: UiState, modifier: Modifier = Modifier) {
         val frameWidth = windowWidth + 16.dp
         val frameHeight = windowHeight + 44.dp
 
+        var scale by remember { mutableFloatStateOf(1f) }
+        var offset by remember { mutableStateOf(Offset.Zero) }
+        var holding by remember { mutableStateOf(false) }
+
+        // A new frame starts at 1×: a zoom that survived an open would land on
+        // somebody else's composition.
+        LaunchedEffect(state.source?.uri) {
+            scale = 1f
+            offset = Offset.Zero
+        }
+        val transform = remember {
+            TransformableState { zoomChange, panChange, _ ->
+                scale = (scale * zoomChange).coerceIn(1f, 8f)
+                offset = if (scale > 1.001f) offset + panChange else Offset.Zero
+            }
+        }
+
         // A soft safelight behind the negative, which is what keeps the canvas
         // from reading as a black rectangle with a picture in it.
         Box(
@@ -252,13 +272,44 @@ private fun CanvasArea(state: UiState, modifier: Modifier = Modifier) {
             modifier = Modifier
                 .width(frameWidth)
                 .height(frameHeight)
-                .align(Alignment.Center),
-            edgeTop = filmEdgeName(state),
-            edgeTopRight = frameNumberOf(state),
-            edgeBottomLeft = "16A",
-            edgeBottomRight = "${frameNumberOf(state)} ▮▮▮",
+                .align(Alignment.Center)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onLongPress = { holding = true },
+                        onPress = {
+                            tryAwaitRelease()
+                            holding = false
+                        },
+                    )
+                }
+                .transformable(state = transform)
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = offset.x
+                    translationY = offset.y
+                },
+        edgeTop = filmEdgeName(state),
+        edgeTopRight = frameNumberOf(state),
+        edgeBottomLeft = "16A",
+        edgeBottomRight = "${frameNumberOf(state)} ▮▮▮",
         ) {
-            Photo(state = state)
+            Photo(state = state, holding = holding)
+        }
+
+        if (holding) {
+            // The badge is the difference between "this is the before" and "the
+            // app forgot my edits".
+            FrameBadge(
+                text = "原图",
+                modifier = Modifier.align(Alignment.TopStart).padding(start = 18.dp, top = 18.dp),
+            )
+        }
+        if (scale > 1.001f) {
+            FrameBadge(
+                text = scale.roundToInt().toString() + "×",
+                modifier = Modifier.align(Alignment.BottomStart).padding(start = 18.dp, bottom = 21.dp),
+            )
         }
 
         Histogram(
@@ -284,83 +335,17 @@ private fun canvasBadge(state: UiState): String {
     return "${state.tier} · ${info.width}×${info.height}"
 }
 
-/**
- * The photograph itself, fitted inside the negative's window.
- *
- * **Pinch to inspect, hold to see the frame as it was opened.** Both are
- * Compose's own components: `transformable` owns the pinch and the pan, and
- * `detectTapGestures` owns the press. Nothing divides pixels by hand — the scale
- * and the translation go into a `graphicsLayer`, which is also what keeps the
- * gesture at the compositor's frame rate instead of the engine's.
- *
- * The long press shows `state.original`, the first frame of the session. It is
- * deliberately *not* a second render with the current parameters: "before" has to
- * mean what came out of the camera, or it is just another after.
- */
+/** The photograph itself; the gestures and the zoom live on the frame around it. */
 @Composable
-private fun Photo(state: UiState) {
-    val bitmap = state.bitmap
-    var scale by remember { mutableFloatStateOf(1f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
-    var holding by remember { mutableStateOf(false) }
-
-    // A new frame starts at 1×: a zoom that survived an open would land on
-    // somebody else's composition.
-    LaunchedEffect(state.source?.uri) {
-        scale = 1f
-        offset = Offset.Zero
-    }
-    val transform = remember {
-        TransformableState { zoomChange, panChange, _ ->
-            scale = (scale * zoomChange).coerceIn(1f, 8f)
-            offset = if (scale > 1.001f) offset + panChange else Offset.Zero
-        }
-    }
-
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color(0xFF0A0908))
-            .testTag("editor-frame")
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onLongPress = { holding = true },
-                    onPress = {
-                        tryAwaitRelease()
-                        holding = false
-                    },
-                )
-            }
-            .transformable(state = transform),
-    ) {
-        val shown = if (holding) state.original ?: bitmap else bitmap
+private fun Photo(state: UiState, holding: Boolean) {
+    val shown = if (holding) state.original ?: state.bitmap else state.bitmap
+    Box(Modifier.fillMaxSize().background(Color(0xFF0A0908)).testTag("editor-frame")) {
         if (shown != null) {
             Image(
                 bitmap = shown.asImageBitmap(),
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        translationX = offset.x
-                        translationY = offset.y
-                    },
-            )
-        }
-        if (holding) {
-            // The badge is the difference between "this is the before" and "the
-            // app forgot my edits".
-            FrameBadge(
-                text = "原图",
-                modifier = Modifier.align(Alignment.TopStart).padding(start = 18.dp, top = 18.dp),
-            )
-        }
-        if (scale > 1.001f) {
-            FrameBadge(
-                text = scale.roundToInt().toString() + "×",
-                modifier = Modifier.align(Alignment.BottomStart).padding(start = 18.dp, bottom = 21.dp),
+                modifier = Modifier.fillMaxSize(),
             )
         }
     }

@@ -29,6 +29,10 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.runtime.rememberUpdatedState
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
@@ -185,20 +189,21 @@ private fun CropCanvas(
         fun clampX(value: Float, width: Float) = value.coerceIn(0f, (1f - width).coerceAtLeast(0f))
         fun clampY(value: Float, height: Float) = value.coerceIn(0f, (1f - height).coerceAtLeast(0f))
 
-        val transform = remember {
-            TransformableState { zoomChange, _, _ ->
-                val width = (cropW / zoomChange).coerceIn(0.08f, 1f)
-                val height = (cropH / zoomChange).coerceIn(0.08f, 1f)
-                // Grow and shrink around the box's own centre.
-                val centreX = cropX + cropW / 2f
-                val centreY = cropY + cropH / 2f
-                onCrop(
-                    clampX(centreX - width / 2f, width),
-                    clampY(centreY - height / 2f, height),
-                    width,
-                    height,
-                )
-            }
+        // The finger moves a local rect; the engine sees one delta when the
+        // gesture settles. Committing every frame queued a render per frame, which
+        // is exactly what made the parameter page's sliders feel broken.
+        var rect by remember { mutableStateOf(CropRect(cropX, cropY, cropW, cropH)) }
+
+        // Anything that changes the rect from outside (an aspect pill, undo, a
+        // re-open) wins, unless we are the ones mid-gesture.
+        LaunchedEffect(cropX, cropY, cropW, cropH) {
+            val fresh = CropRect(cropX, cropY, cropW, cropH)
+            if (fresh != rect) rect = fresh
+        }
+        LaunchedEffect(rect) {
+            if (rect == CropRect(cropX, cropY, cropW, cropH)) return@LaunchedEffect
+            delay(120)
+            onCrop(rect.x, rect.y, rect.w, rect.h)
         }
 
         Box(
@@ -206,18 +211,27 @@ private fun CropCanvas(
                 .width(frameWidth)
                 .height(frameHeight)
                 .clip(RoundedCornerShape(2.dp))
-                .pointerInput(frameWidthPx, frameHeightPx, cropX, cropY, cropW, cropH) {
-                    detectDragGestures { change, drag ->
-                        change.consume()
-                        onCrop(
-                            clampX(cropX + drag.x / frameWidthPx, cropW),
-                            clampY(cropY + drag.y / frameHeightPx, cropH),
-                            cropW,
-                            cropH,
+                // One detector, not two. `detectDragGestures` and `transformable`
+                // on the same node compete for the same pointers and the drag
+                // detector claims the first one, so a pinch never arrived. The old
+                // `pointerInput` keys were also the crop values themselves, which
+                // tore the handler down on the first update of every gesture.
+                .pointerInput(frameWidthPx, frameHeightPx) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        val r = rect
+                        val width = (r.w / zoom).coerceIn(0.05f, 1f)
+                        val height = (r.h / zoom).coerceIn(0.05f, 1f)
+                        // Scale around the box's own centre, then pan.
+                        val centreX = r.x + r.w / 2f
+                        val centreY = r.y + r.h / 2f
+                        rect = CropRect(
+                            clampX(centreX - width / 2f + pan.x / frameWidthPx, width),
+                            clampY(centreY - height / 2f + pan.y / frameHeightPx, height),
+                            width,
+                            height,
                         )
                     }
-                }
-                .transformable(state = transform),
+                },
         ) {
             if (bitmap != null) {
                 Image(
@@ -230,10 +244,10 @@ private fun CropCanvas(
                 Box(Modifier.fillMaxSize().background(Tokens.Raise))
             }
 
-            val boxWidthDp = frameWidth * cropW
-            val boxHeightDp = frameHeight * cropH
-            val leftDp = frameWidth * cropX
-            val topDp = frameHeight * cropY
+            val boxWidthDp = frameWidth * rect.w
+            val boxHeightDp = frameHeight * rect.h
+            val leftDp = frameWidth * rect.x
+            val topDp = frameHeight * rect.y
 
             // Everything outside the rect, dimmed: four bands rather than one
             // rectangle so the frame's own light still reads around the keep.
@@ -242,18 +256,21 @@ private fun CropCanvas(
                     .background(Tokens.Scrim),
             )
             Box(
-                Modifier.width(frameWidth).height((frameHeight - topDp - boxHeightDp).coerceAtLeast(0.dp))
-                    .align(Alignment.BottomStart).background(Tokens.Scrim),
+                Modifier.width(frameWidth)
+                    .height((frameHeight - topDp - boxHeightDp).coerceAtLeast(0.dp))
+                    .align(Alignment.TopStart).offset(y = topDp + boxHeightDp)
+                    .background(Tokens.Scrim),
             )
             Box(
-                Modifier.width(leftDp).height(boxHeightDp)
-                    .offset(x = 0.dp, y = topDp).align(Alignment.TopStart)
+                Modifier.width(leftDp).height(boxHeightDp).align(Alignment.TopStart)
+                    .offset(y = topDp)
                     .background(Tokens.Scrim),
             )
             Box(
                 Modifier.width((frameWidth - leftDp - boxWidthDp).coerceAtLeast(0.dp))
-                    .height(boxHeightDp).offset(x = leftDp + boxWidthDp, y = topDp)
-                    .align(Alignment.TopStart).background(Tokens.Scrim),
+                    .height(boxHeightDp).align(Alignment.TopStart)
+                    .offset(x = leftDp + boxWidthDp, y = topDp)
+                    .background(Tokens.Scrim),
             )
 
             val boxShape = RoundedCornerShape(1.dp)
@@ -280,6 +297,8 @@ private fun CropCanvas(
         }
     }
 }
+
+private data class CropRect(val x: Float, val y: Float, val w: Float, val h: Float)
 
 /** Four crosshair corners in the file's own shape: a 26 dp bar crossing a 4 dp one. */
 @Composable
